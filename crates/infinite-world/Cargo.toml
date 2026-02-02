@@ -1,0 +1,11 @@
+[package]
+name = "infinite-world"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "World and timeline system for the Infinite engine"
+
+[dependencies]
+infinite-core.workspace = true
+serde.workspace = true

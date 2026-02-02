@@ -1,0 +1,12 @@
+[package]
+name = "infinite-render"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Vulkan renderer with ray tracing for the Infinite engine"
+
+[dependencies]
+infinite-core.workspace = true
+vulkano.workspace = true
+ash.workspace = true

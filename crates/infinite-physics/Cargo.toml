@@ -1,0 +1,11 @@
+[package]
+name = "infinite-physics"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Physics system for the Infinite engine using rapier3d"
+
+[dependencies]
+infinite-core.workspace = true
+rapier3d.workspace = true

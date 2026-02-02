@@ -1,0 +1,11 @@
+[package]
+name = "infinite-audio"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Audio system for the Infinite engine using kira"
+
+[dependencies]
+infinite-core.workspace = true
+kira.workspace = true

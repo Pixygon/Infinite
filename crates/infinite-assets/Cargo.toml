@@ -1,0 +1,12 @@
+[package]
+name = "infinite-assets"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Asset loading and management for the Infinite engine"
+
+[dependencies]
+infinite-core.workspace = true
+gltf.workspace = true
+image.workspace = true

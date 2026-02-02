@@ -1,0 +1,12 @@
+[package]
+name = "infinite-game"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Game logic for Infinite"
+
+[dependencies]
+infinite-core.workspace = true
+infinite-ecs.workspace = true
+serde.workspace = true

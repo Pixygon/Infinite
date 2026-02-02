@@ -1,0 +1,11 @@
+[package]
+name = "infinite-ecs"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Entity Component System for the Infinite engine"
+
+[dependencies]
+infinite-core.workspace = true
+parking_lot.workspace = true
