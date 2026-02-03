@@ -22,7 +22,7 @@ use vulkano::{
     },
     descriptor_set::allocator::StandardDescriptorSetAllocator,
     device::{
-        physical::PhysicalDeviceType, Device, DeviceCreateInfo, DeviceExtensions, Queue,
+        physical::PhysicalDeviceType, Device, DeviceCreateInfo, DeviceExtensions, DeviceFeatures, Queue,
         QueueCreateInfo, QueueFlags,
     },
     format::Format,
@@ -41,7 +41,7 @@ use vulkano::{
             depth_stencil::{DepthState, DepthStencilState},
             input_assembly::InputAssemblyState,
             multisample::MultisampleState,
-            rasterization::{CullMode, FrontFace, RasterizationState},
+            rasterization::{CullMode, FrontFace, PolygonMode, RasterizationState},
             vertex_input::VertexDefinition,
             viewport::{Viewport, ViewportState},
             GraphicsPipelineCreateInfo,
@@ -110,11 +110,13 @@ struct RenderContext {
     // 3D pipelines
     basic_pipeline: Option<Arc<GraphicsPipeline>>,
     sky_pipeline: Option<Arc<GraphicsPipeline>>,
+    wireframe_pipeline: Option<Arc<GraphicsPipeline>>,
 
     // Mesh buffers
     capsule_mesh: Option<MeshBuffers>,
     terrain_mesh: Option<MeshBuffers>,
     sky_mesh: Option<SkyMeshBuffers>,
+    debug_capsule_mesh: Option<MeshBuffers>,
 }
 
 /// Application state
@@ -175,6 +177,14 @@ struct InfiniteApp {
     time_of_day: TimeOfDay,
     /// Weather system
     weather: Weather,
+
+    // Debug
+    /// Whether the debug overlay is visible
+    debug_visible: bool,
+    /// Render terrain in wireframe mode
+    debug_wireframe: bool,
+    /// Show collider shapes
+    debug_colliders: bool,
 }
 
 impl InfiniteApp {
@@ -209,6 +219,10 @@ impl InfiniteApp {
             terrain: None,
             time_of_day: TimeOfDay::default(),
             weather: Weather::default(),
+
+            debug_visible: false,
+            debug_wireframe: false,
+            debug_colliders: false,
         }
     }
 
@@ -842,11 +856,41 @@ impl InfiniteApp {
                                     .anchor(egui::Align2::CENTER_BOTTOM, [0.0, -20.0])
                                     .show(&ctx, |ui| {
                                         ui.label(
-                                            egui::RichText::new("WASD: Move | Space: Jump | Shift: Sprint | Scroll: Zoom | ESC: Pause | T: Pause Time | Y: Weather | U: +1 Hour")
+                                            egui::RichText::new("WASD: Move | Space: Jump | Shift: Sprint | Scroll: Zoom | ESC: Pause | F3: Debug | T: Pause Time | Y: Weather | U: +1 Hour")
                                                 .color(egui::Color32::from_rgba_unmultiplied(150, 150, 170, 200))
                                                 .font(egui::FontId::proportional(12.0)),
                                         );
                                     });
+
+                                // Debug overlay (F3)
+                                if self.debug_visible {
+                                    let player_pos = self.player.as_ref().map(|p| p.position()).unwrap_or(Vec3::ZERO);
+                                    let player_grounded = self.player.as_ref().map(|p| p.is_grounded()).unwrap_or(false);
+                                    let terrain_height = self.terrain.as_ref().map(|t| t.height_at(player_pos.x, player_pos.z)).unwrap_or(0.0);
+
+                                    egui::Window::new("Debug")
+                                        .anchor(egui::Align2::LEFT_BOTTOM, [10.0, -40.0])
+                                        .resizable(false)
+                                        .collapsible(true)
+                                        .default_width(280.0)
+                                        .show(&ctx, |ui| {
+                                            ui.heading("Player");
+                                            ui.label(format!("Position: ({:.1}, {:.1}, {:.1})", player_pos.x, player_pos.y, player_pos.z));
+                                            ui.label(format!("Grounded: {}", player_grounded));
+                                            ui.label(format!("Terrain height: {:.2}", terrain_height));
+                                            ui.label(format!("Above terrain: {:.2}", player_pos.y - terrain_height));
+
+                                            ui.separator();
+                                            ui.heading("Rendering");
+                                            ui.checkbox(&mut self.debug_wireframe, "Wireframe terrain");
+                                            ui.checkbox(&mut self.debug_colliders, "Show colliders");
+
+                                            ui.separator();
+                                            ui.heading("World");
+                                            ui.label(format!("Time: {} ({})", self.time_of_day.formatted_time(), self.time_of_day.period_name()));
+                                            ui.label(format!("Weather: {}", self.weather.current.name()));
+                                        });
+                                }
 
                                 StateTransition::None
                             }
@@ -989,30 +1033,57 @@ impl InfiniteApp {
                 }
             }
 
-            // Render terrain
-            if let (Some(basic_pipeline), Some(terrain_mesh)) = (&render_ctx.basic_pipeline, &render_ctx.terrain_mesh) {
-                let push = BasicPushConstants::new(
-                    Mat4::IDENTITY,
-                    view_matrix,
-                    projection_matrix,
-                    sun_direction,
-                    sun_intensity,
-                    Vec3::new(1.0, 0.95, 0.85),
-                    ambient_intensity,
-                );
+            // Render terrain (use wireframe pipeline if debug enabled)
+            if let Some(terrain_mesh) = &render_ctx.terrain_mesh {
+                let terrain_pipeline = if self.debug_wireframe {
+                    render_ctx.wireframe_pipeline.as_ref().or(render_ctx.basic_pipeline.as_ref())
+                } else {
+                    render_ctx.basic_pipeline.as_ref()
+                };
 
-                unsafe {
-                    builder
-                        .bind_pipeline_graphics(basic_pipeline.clone())
-                        .unwrap()
-                        .push_constants(basic_pipeline.layout().clone(), 0, push)
-                        .unwrap()
-                        .bind_vertex_buffers(0, terrain_mesh.vertex_buffer.clone())
-                        .unwrap()
-                        .bind_index_buffer(terrain_mesh.index_buffer.clone())
-                        .unwrap()
-                        .draw_indexed(terrain_mesh.index_count, 1, 0, 0, 0)
-                        .unwrap();
+                if let Some(pipeline) = terrain_pipeline {
+                    let push = BasicPushConstants::new(
+                        Mat4::IDENTITY,
+                        view_matrix,
+                        projection_matrix,
+                        sun_direction,
+                        sun_intensity,
+                        Vec3::new(1.0, 0.95, 0.85),
+                        ambient_intensity,
+                    );
+
+                    unsafe {
+                        builder
+                            .bind_pipeline_graphics(pipeline.clone())
+                            .unwrap()
+                            .push_constants(pipeline.layout().clone(), 0, push)
+                            .unwrap()
+                            .bind_vertex_buffers(0, terrain_mesh.vertex_buffer.clone())
+                            .unwrap()
+                            .bind_index_buffer(terrain_mesh.index_buffer.clone())
+                            .unwrap()
+                            .draw_indexed(terrain_mesh.index_count, 1, 0, 0, 0)
+                            .unwrap();
+                    }
+
+                    // If wireframe mode, also draw solid underneath for visibility
+                    if self.debug_wireframe {
+                        if let Some(basic_pipeline) = &render_ctx.basic_pipeline {
+                            unsafe {
+                                builder
+                                    .bind_pipeline_graphics(basic_pipeline.clone())
+                                    .unwrap()
+                                    .push_constants(basic_pipeline.layout().clone(), 0, push)
+                                    .unwrap()
+                                    .bind_vertex_buffers(0, terrain_mesh.vertex_buffer.clone())
+                                    .unwrap()
+                                    .bind_index_buffer(terrain_mesh.index_buffer.clone())
+                                    .unwrap()
+                                    .draw_indexed(terrain_mesh.index_count, 1, 0, 0, 0)
+                                    .unwrap();
+                            }
+                        }
+                    }
                 }
             }
 
@@ -1045,6 +1116,65 @@ impl InfiniteApp {
                         .unwrap()
                         .draw_indexed(capsule_mesh.index_count, 1, 0, 0, 0)
                         .unwrap();
+                }
+            }
+
+            // Debug: render collider wireframes
+            if self.debug_colliders {
+                if let Some(wireframe_pipeline) = &render_ctx.wireframe_pipeline {
+                    // Render player collider capsule as wireframe
+                    if let (Some(capsule_mesh), Some(player)) = (&render_ctx.capsule_mesh, &self.player) {
+                        let player_pos = player.position();
+                        let model = Mat4::from_translation(player_pos);
+
+                        let push = BasicPushConstants::new(
+                            model,
+                            view_matrix,
+                            projection_matrix,
+                            Vec3::new(0.0, 1.0, 0.0), // green light direction for debug color
+                            0.0,                        // no sun influence
+                            Vec3::new(0.0, 1.0, 0.0),  // green wireframe
+                            1.0,                        // full ambient for uniform color
+                        );
+
+                        unsafe {
+                            builder
+                                .bind_pipeline_graphics(wireframe_pipeline.clone())
+                                .unwrap()
+                                .push_constants(wireframe_pipeline.layout().clone(), 0, push)
+                                .unwrap()
+                                .bind_vertex_buffers(0, capsule_mesh.vertex_buffer.clone())
+                                .unwrap()
+                                .bind_index_buffer(capsule_mesh.index_buffer.clone())
+                                .unwrap()
+                                .draw_indexed(capsule_mesh.index_count, 1, 0, 0, 0)
+                                .unwrap();
+                        }
+                    }
+
+                    // Render heightfield bounds as wireframe box
+                    if let Some(terrain) = &self.terrain {
+                        let half_size = terrain.config.size / 2.0;
+                        let min_h = terrain.min_height;
+                        let max_h = terrain.max_height;
+
+                        // Create or reuse a debug box mesh for the heightfield bounds
+                        if render_ctx.debug_capsule_mesh.is_none() {
+                            let box_mesh = Mesh::capsule(
+                                max_h - min_h,
+                                half_size.min(10.0),
+                                4, 4,
+                                [0.0, 1.0, 0.0, 0.3],
+                            );
+                            if let Ok(buffers) = create_mesh_buffers(
+                                render_ctx.memory_allocator.clone(),
+                                &box_mesh.vertices,
+                                &box_mesh.indices,
+                            ) {
+                                render_ctx.debug_capsule_mesh = Some(buffers);
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -1298,6 +1428,11 @@ impl ApplicationHandler for InfiniteApp {
                     ..Default::default()
                 }],
                 enabled_extensions: device_extensions,
+                enabled_features: DeviceFeatures {
+                    fill_mode_non_solid: true,
+                    wide_lines: true,
+                    ..DeviceFeatures::empty()
+                },
                 ..Default::default()
             },
         )
@@ -1339,6 +1474,11 @@ impl ApplicationHandler for InfiniteApp {
             tracing::error!("Failed to create sky pipeline!");
         } else {
             info!("Sky pipeline created successfully");
+        }
+
+        let wireframe_pipeline = create_wireframe_pipeline(device.clone(), render_pass.clone());
+        if wireframe_pipeline.is_some() {
+            info!("Wireframe debug pipeline created successfully");
         }
 
         // Create capsule mesh for player/preview
@@ -1404,9 +1544,11 @@ impl ApplicationHandler for InfiniteApp {
             depth_buffer,
             basic_pipeline,
             sky_pipeline,
+            wireframe_pipeline,
             capsule_mesh,
             terrain_mesh: None,
             sky_mesh,
+            debug_capsule_mesh: None,
         });
         self.gui = Some(gui);
         self.last_frame = Instant::now();
@@ -1465,6 +1607,14 @@ impl ApplicationHandler for InfiniteApp {
                             ));
                         }
                         _ => {}
+                    }
+                }
+
+                // F3 toggles debug overlay (works in any state)
+                if state == ElementState::Pressed {
+                    if let PhysicalKey::Code(KeyCode::F3) = physical_key {
+                        self.debug_visible = !self.debug_visible;
+                        info!("Debug overlay: {}", if self.debug_visible { "ON" } else { "OFF" });
                     }
                 }
 
@@ -1710,6 +1860,80 @@ fn create_basic_pipeline(
             rasterization_state: Some(RasterizationState {
                 cull_mode: CullMode::None, // Disable culling for debugging
                 front_face: FrontFace::CounterClockwise,
+                ..Default::default()
+            }),
+            multisample_state: Some(MultisampleState::default()),
+            depth_stencil_state: Some(DepthStencilState {
+                depth: Some(DepthState::simple()),
+                ..Default::default()
+            }),
+            color_blend_state: Some(ColorBlendState::with_attachment_states(
+                1,
+                ColorBlendAttachmentState::default(),
+            )),
+            dynamic_state: [DynamicState::Viewport, DynamicState::Scissor].into_iter().collect(),
+            subpass: Some(Subpass::from(render_pass, 0).unwrap().into()),
+            ..GraphicsPipelineCreateInfo::layout(layout)
+        },
+    )
+    .ok()
+}
+
+/// Create a wireframe rendering pipeline (same as basic but with PolygonMode::Line)
+fn create_wireframe_pipeline(
+    device: Arc<Device>,
+    render_pass: Arc<RenderPass>,
+) -> Option<Arc<GraphicsPipeline>> {
+    mod wireframe_vs {
+        vulkano_shaders::shader! {
+            ty: "vertex",
+            path: "assets/shaders/basic.vert",
+        }
+    }
+
+    mod wireframe_fs {
+        vulkano_shaders::shader! {
+            ty: "fragment",
+            path: "assets/shaders/basic.frag",
+        }
+    }
+
+    let vs = wireframe_vs::load(device.clone()).ok()?;
+    let fs = wireframe_fs::load(device.clone()).ok()?;
+
+    let vs_entry = vs.entry_point("main")?;
+    let fs_entry = fs.entry_point("main")?;
+
+    let vertex_input_state = [Vertex3D::per_vertex()]
+        .definition(&vs_entry)
+        .ok()?;
+
+    let stages = [
+        PipelineShaderStageCreateInfo::new(vs_entry),
+        PipelineShaderStageCreateInfo::new(fs_entry),
+    ];
+
+    let layout = PipelineLayout::new(
+        device.clone(),
+        PipelineDescriptorSetLayoutCreateInfo::from_stages(&stages)
+            .into_pipeline_layout_create_info(device.clone())
+            .ok()?,
+    )
+    .ok()?;
+
+    GraphicsPipeline::new(
+        device.clone(),
+        None,
+        GraphicsPipelineCreateInfo {
+            stages: stages.into_iter().collect(),
+            vertex_input_state: Some(vertex_input_state),
+            input_assembly_state: Some(InputAssemblyState::default()),
+            viewport_state: Some(ViewportState::default()),
+            rasterization_state: Some(RasterizationState {
+                cull_mode: CullMode::None,
+                front_face: FrontFace::CounterClockwise,
+                polygon_mode: PolygonMode::Line,
+                line_width: 2.0,
                 ..Default::default()
             }),
             multisample_state: Some(MultisampleState::default()),
