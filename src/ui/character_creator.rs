@@ -810,12 +810,7 @@ impl CharacterCreator {
                 egui::Sense::click_and_drag(),
             );
 
-            // Draw background for the 3D area
-            ui.painter().rect_filled(
-                rect,
-                5.0,
-                Color32::from_rgb(20, 20, 30),
-            );
+            // 3D preview area - no fill, rendered by Vulkan in subpass 0
 
             // Store the preview rect for 3D rendering (accessed via egui context)
             ui.ctx().data_mut(|data| {

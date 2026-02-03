@@ -12,7 +12,7 @@ use std::time::Instant;
 
 use anyhow::{Context, Result};
 use egui_winit_vulkano::{Gui, GuiConfig};
-use tracing::{info, Level};
+use tracing::{debug, info, Level};
 use tracing_subscriber::FmtSubscriber;
 use vulkano::{
     buffer::{Buffer, BufferCreateInfo, BufferUsage, Subbuffer},
@@ -27,7 +27,13 @@ use vulkano::{
     },
     format::Format,
     image::{view::ImageView, Image, ImageCreateInfo, ImageUsage},
-    instance::{Instance, InstanceCreateFlags, InstanceCreateInfo},
+    instance::{
+        debug::{
+            DebugUtilsMessageSeverity, DebugUtilsMessageType, DebugUtilsMessenger,
+            DebugUtilsMessengerCreateInfo,
+        },
+        Instance, InstanceCreateFlags, InstanceCreateInfo, InstanceExtensions,
+    },
     memory::allocator::{AllocationCreateInfo, MemoryTypeFilter, StandardMemoryAllocator},
     pipeline::{
         graphics::{
@@ -655,8 +661,20 @@ impl InfiniteApp {
                 style.visuals.panel_fill = egui::Color32::from_rgb(30, 30, 40);
                 ctx.set_style(style);
 
+                // For states that need 3D rendering (Playing, CharacterCreation), use transparent background
+                // For UI-only states (Loading, MainMenu, Settings, Paused), use opaque background
+                let needs_transparent = matches!(
+                    self.app_state,
+                    ApplicationState::Playing | ApplicationState::CharacterCreation
+                );
+                let panel_fill = if needs_transparent {
+                    egui::Color32::TRANSPARENT
+                } else {
+                    egui::Color32::from_rgb(20, 20, 30)
+                };
+
                 egui::CentralPanel::default()
-                    .frame(egui::Frame::new().fill(egui::Color32::from_rgb(20, 20, 30)))
+                    .frame(egui::Frame::new().fill(panel_fill))
                     .show(&ctx, |ui| {
                         let transition = match &mut self.app_state {
                             ApplicationState::Loading(phase) => {
@@ -889,7 +907,7 @@ impl InfiniteApp {
 
         // Calculate view and projection matrices
         let aspect_ratio = window_size.width as f32 / window_size.height as f32;
-        let (view_matrix, projection_matrix) = if matches!(self.app_state, ApplicationState::Playing) {
+        let (view_matrix, mut projection_matrix) = if matches!(self.app_state, ApplicationState::Playing) {
             if let Some(camera) = &self.camera {
                 (camera.view_matrix(), camera.projection_matrix(aspect_ratio, 60.0))
             } else {
@@ -898,15 +916,37 @@ impl InfiniteApp {
         } else {
             default_matrices(aspect_ratio)
         };
+        // Vulkan Y-axis is inverted compared to OpenGL, flip it in projection
+        projection_matrix.y_axis.y *= -1.0;
 
         // Get lighting from time of day and weather
         let sun_direction = self.time_of_day.light_direction();
         let sun_intensity = self.time_of_day.light_intensity() * self.weather.sun_modifier();
         let ambient_intensity = 0.3 * self.weather.ambient_modifier();
 
+        // Set viewport and scissor for all 3D rendering in subpass 0
+        // Both must be set when using dynamic state
+        let scissor = vulkano::pipeline::graphics::viewport::Scissor {
+            offset: [0, 0],
+            extent: [window_size.width, window_size.height],
+        };
+        builder
+            .set_viewport(0, [viewport.clone()].into_iter().collect())
+            .unwrap()
+            .set_scissor(0, [scissor.clone()].into_iter().collect())
+            .unwrap();
+
         // Render 3D scene if playing
         if matches!(self.app_state, ApplicationState::Playing) {
-            builder.set_viewport(0, [viewport.clone()].into_iter().collect()).unwrap();
+            // Log 3D state (first frame only via static flag)
+            static LOGGED_PLAYING_STATE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+            if !LOGGED_PLAYING_STATE.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                let has_sky = render_ctx.sky_pipeline.is_some() && render_ctx.sky_mesh.is_some();
+                let has_terrain = render_ctx.basic_pipeline.is_some() && render_ctx.terrain_mesh.is_some();
+                let has_capsule = render_ctx.basic_pipeline.is_some() && render_ctx.capsule_mesh.is_some() && self.player.is_some();
+                info!("Playing 3D state: sky={}, terrain={}, capsule={}, player={}",
+                      has_sky, has_terrain, has_capsule, self.player.is_some());
+            }
 
             // Render sky dome
             if let (Some(sky_pipeline), Some(sky_mesh)) = (&render_ctx.sky_pipeline, &render_ctx.sky_mesh) {
@@ -1006,15 +1046,37 @@ impl InfiniteApp {
                 data.get_temp(egui::Id::new("character_preview_rect"))
             });
 
+            // Log preview state (first frame only via static flag)
+            static LOGGED_PREVIEW_STATE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+            if !LOGGED_PREVIEW_STATE.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                let has_rect = preview_rect.is_some();
+                let has_pipeline = render_ctx.basic_pipeline.is_some();
+                let has_capsule = render_ctx.capsule_mesh.is_some();
+                info!("Character preview state: rect={}, pipeline={}, capsule={}", has_rect, has_pipeline, has_capsule);
+            }
+
             if let Some([px, py, pw, ph]) = preview_rect {
+                // Log rect details once
+                static LOGGED_RECT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+                if !LOGGED_RECT.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                    info!("Preview rect: pos=({}, {}), size=({}, {})", px, py, pw, ph);
+                }
                 if pw > 10.0 && ph > 10.0 {
-                    // Set viewport to preview area
+                    // Set viewport and scissor to preview area
                     let preview_viewport = Viewport {
                         offset: [px, py],
                         extent: [pw, ph],
                         depth_range: 0.0..=1.0,
                     };
-                    builder.set_viewport(0, [preview_viewport].into_iter().collect()).unwrap();
+                    let preview_scissor = vulkano::pipeline::graphics::viewport::Scissor {
+                        offset: [px as u32, py as u32],
+                        extent: [pw as u32, ph as u32],
+                    };
+                    builder
+                        .set_viewport(0, [preview_viewport].into_iter().collect())
+                        .unwrap()
+                        .set_scissor(0, [preview_scissor].into_iter().collect())
+                        .unwrap();
 
                     // Calculate preview camera (orbit around capsule)
                     let rotation = self.character_creator.preview_rotation.to_radians();
@@ -1023,12 +1085,20 @@ impl InfiniteApp {
                     let target = Vec3::new(0.0, 0.9, 0.0);
 
                     let preview_view = Mat4::look_at_rh(cam_pos, target, Vec3::Y);
-                    let preview_proj = Mat4::perspective_rh(45f32.to_radians(), pw / ph, 0.1, 100.0);
+                    // Vulkan Y-axis is inverted compared to OpenGL, flip it in projection
+                    let mut preview_proj = Mat4::perspective_rh(45f32.to_radians(), pw / ph, 0.1, 100.0);
+                    preview_proj.y_axis.y *= -1.0;
 
                     // Render capsule with fixed lighting
                     if let (Some(basic_pipeline), Some(capsule_mesh)) =
                         (&render_ctx.basic_pipeline, &render_ctx.capsule_mesh)
                     {
+                        // Log first draw call
+                        static LOGGED_DRAW: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+                        if !LOGGED_DRAW.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                            info!("Drawing capsule preview: {} indices, viewport=({}, {}, {}, {})",
+                                  capsule_mesh.index_count, px, py, pw, ph);
+                        }
                         let push = BasicPushConstants::new(
                             Mat4::IDENTITY,
                             preview_view,
@@ -1054,8 +1124,12 @@ impl InfiniteApp {
                         }
                     }
 
-                    // Reset viewport for UI
-                    builder.set_viewport(0, [viewport].into_iter().collect()).unwrap();
+                    // Reset viewport and scissor for UI
+                    builder
+                        .set_viewport(0, [viewport].into_iter().collect())
+                        .unwrap()
+                        .set_scissor(0, [scissor].into_iter().collect())
+                        .unwrap();
                 }
             }
         }
@@ -1232,21 +1306,39 @@ impl ApplicationHandler for InfiniteApp {
 
         // Create capsule mesh for player/preview
         let capsule_mesh_data = Mesh::capsule(1.8, 0.4, 16, 16, [0.6, 0.7, 0.8, 1.0]);
-        let capsule_mesh = create_mesh_buffers(
+        let capsule_mesh = match create_mesh_buffers(
             memory_allocator.clone(),
             &capsule_mesh_data.vertices,
             &capsule_mesh_data.indices,
-        )
-        .ok();
+        ) {
+            Ok(mesh) => {
+                info!("Capsule mesh created: {} vertices, {} indices",
+                      capsule_mesh_data.vertices.len(), capsule_mesh_data.indices.len());
+                Some(mesh)
+            }
+            Err(e) => {
+                tracing::error!("Failed to create capsule mesh: {}", e);
+                None
+            }
+        };
 
         // Create sky dome mesh
         let sky_mesh_data = SkyMesh::dome(32, 16);
-        let sky_mesh = create_sky_mesh_buffers(
+        let sky_mesh = match create_sky_mesh_buffers(
             memory_allocator.clone(),
             &sky_mesh_data.vertices,
             &sky_mesh_data.indices,
-        )
-        .ok();
+        ) {
+            Ok(mesh) => {
+                info!("Sky mesh created: {} vertices, {} indices",
+                      sky_mesh_data.vertices.len(), sky_mesh_data.indices.len());
+                Some(mesh)
+            }
+            Err(e) => {
+                tracing::error!("Failed to create sky mesh: {}", e);
+                None
+            }
+        };
 
         // Create egui renderer (subpass 1 - UI overlay)
         let gui = Gui::new_with_subpass(
@@ -1445,8 +1537,30 @@ fn main() -> Result<()> {
     let library = VulkanLibrary::new().context("Failed to load Vulkan library")?;
 
     // Get required extensions for windowing
-    let required_extensions = Surface::required_extensions(&event_loop)
+    let mut required_extensions = Surface::required_extensions(&event_loop)
         .context("Failed to get required surface extensions")?;
+
+    // Enable debug utils extension for validation layer messages
+    required_extensions.ext_debug_utils = true;
+
+    // Enable validation layers in debug builds
+    let enabled_layers: Vec<String> = if cfg!(debug_assertions) {
+        // Check if validation layer is available
+        let available_layers: Vec<_> = library
+            .layer_properties()
+            .map(|iter| iter.map(|l| l.name().to_owned()).collect())
+            .unwrap_or_default();
+
+        if available_layers.iter().any(|l| l == "VK_LAYER_KHRONOS_validation") {
+            info!("Enabling Vulkan validation layer");
+            vec!["VK_LAYER_KHRONOS_validation".to_owned()]
+        } else {
+            info!("Vulkan validation layer not available - install vulkan-validation-layers package");
+            vec![]
+        }
+    } else {
+        vec![]
+    };
 
     // Create Vulkan instance
     let instance = Instance::new(
@@ -1454,10 +1568,42 @@ fn main() -> Result<()> {
         InstanceCreateInfo {
             flags: InstanceCreateFlags::ENUMERATE_PORTABILITY,
             enabled_extensions: required_extensions,
+            enabled_layers,
             ..Default::default()
         },
     )
     .context("Failed to create Vulkan instance")?;
+
+    // Set up debug messenger to receive validation layer messages
+    let _debug_messenger = if cfg!(debug_assertions) {
+        use vulkano::instance::debug::DebugUtilsMessengerCallback;
+        unsafe {
+            let callback = DebugUtilsMessengerCallback::new(
+                |severity, ty, data| {
+                    let severity_str = if severity.intersects(DebugUtilsMessageSeverity::ERROR) {
+                        "ERROR"
+                    } else if severity.intersects(DebugUtilsMessageSeverity::WARNING) {
+                        "WARNING"
+                    } else {
+                        "INFO"
+                    };
+                    eprintln!(
+                        "[Vulkan {}] {:?}: {}",
+                        severity_str,
+                        ty,
+                        data.message
+                    );
+                },
+            );
+            DebugUtilsMessenger::new(
+                instance.clone(),
+                DebugUtilsMessengerCreateInfo::user_callback(callback),
+            )
+            .ok()
+        }
+    } else {
+        None
+    };
 
     // Create application
     let mut app = InfiniteApp::new(instance);
@@ -1525,7 +1671,7 @@ fn create_basic_pipeline(
             input_assembly_state: Some(InputAssemblyState::default()),
             viewport_state: Some(ViewportState::default()),
             rasterization_state: Some(RasterizationState {
-                cull_mode: CullMode::Back,
+                cull_mode: CullMode::None, // Disable culling for debugging
                 front_face: FrontFace::CounterClockwise,
                 ..Default::default()
             }),
@@ -1538,7 +1684,7 @@ fn create_basic_pipeline(
                 1,
                 ColorBlendAttachmentState::default(),
             )),
-            dynamic_state: [DynamicState::Viewport].into_iter().collect(),
+            dynamic_state: [DynamicState::Viewport, DynamicState::Scissor].into_iter().collect(),
             subpass: Some(Subpass::from(render_pass, 0).unwrap().into()),
             ..GraphicsPipelineCreateInfo::layout(layout)
         },
@@ -1613,7 +1759,7 @@ fn create_sky_pipeline(
                 1,
                 ColorBlendAttachmentState::default(),
             )),
-            dynamic_state: [DynamicState::Viewport].into_iter().collect(),
+            dynamic_state: [DynamicState::Viewport, DynamicState::Scissor].into_iter().collect(),
             subpass: Some(Subpass::from(render_pass, 0).unwrap().into()),
             ..GraphicsPipelineCreateInfo::layout(layout)
         },
