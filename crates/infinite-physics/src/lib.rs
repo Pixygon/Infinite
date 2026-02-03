@@ -109,6 +109,13 @@ impl PhysicsWorld {
         self.query_pipeline.update(&self.collider_set);
     }
 
+    /// Update the query pipeline to reflect newly added/removed colliders.
+    /// Call this after adding colliders if you need raycasts or character
+    /// controller queries before the next `step()`.
+    pub fn update_query_pipeline(&mut self) {
+        self.query_pipeline.update(&self.collider_set);
+    }
+
     /// Add a static collider (ground, walls, etc.)
     pub fn add_static_collider(&mut self, collider: Collider) -> ColliderHandle {
         self.collider_set.insert(collider)

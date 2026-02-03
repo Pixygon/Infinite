@@ -284,6 +284,9 @@ impl InfiniteApp {
         let mut player = PlayerController::new();
         player.spawn(&mut physics, Vec3::new(0.0, spawn_height + 2.0, 0.0));
 
+        // Update query pipeline so the character controller can see terrain on the first frame
+        physics.update_query_pipeline();
+
         // Create camera
         let camera = CameraController::new();
 
@@ -526,8 +529,8 @@ impl InfiniteApp {
                 }
             }
             ApplicationState::Playing => {
-                // Update cursor capture
-                self.update_cursor_capture(true);
+                // Release cursor when debug overlay is open so user can interact with it
+                self.update_cursor_capture(!self.debug_visible);
 
                 // Update world systems
                 self.time_of_day.update(delta);
