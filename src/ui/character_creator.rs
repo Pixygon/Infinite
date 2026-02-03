@@ -4,7 +4,7 @@ use egui::{Align, Color32, FontId, Layout, RichText, ScrollArea, Ui, Vec2};
 
 use crate::character::{
     CharacterAppearance, CharacterData,
-    HairCustomization, SkinCustomization,
+    HairCustomization, Sex, SkinCustomization,
 };
 use crate::state::{ApplicationState, StateTransition};
 
@@ -87,6 +87,8 @@ impl FaceSubTab {
 pub struct CharacterCreator {
     /// Character name input
     pub name: String,
+    /// Selected sex (base body type)
+    pub sex: Sex,
     /// Current appearance being customized
     pub appearance: CharacterAppearance,
     /// Current tab
@@ -101,6 +103,8 @@ pub struct CharacterCreator {
     pub show_wireframe: bool,
     /// Name validation error message
     pub name_error: Option<String>,
+    /// Whether appearance has changed and preview mesh needs rebuilding
+    pub appearance_dirty: bool,
 }
 
 impl Default for CharacterCreator {
@@ -114,13 +118,15 @@ impl CharacterCreator {
     pub fn new() -> Self {
         Self {
             name: String::new(),
-            appearance: CharacterAppearance::default(),
+            sex: Sex::default(),
+            appearance: CharacterAppearance::default_male(),
             current_tab: CreatorTab::default(),
             face_sub_tab: FaceSubTab::default(),
             preview_rotation: 0.0,
             preview_zoom: 1.0,
             show_wireframe: false,
             name_error: None,
+            appearance_dirty: true,
         }
     }
 
@@ -132,6 +138,7 @@ impl CharacterCreator {
     /// Randomize appearance
     pub fn randomize(&mut self) {
         self.appearance.randomize();
+        self.appearance_dirty = true;
     }
 
     /// Validate the character name
@@ -170,6 +177,7 @@ impl CharacterCreator {
     pub fn create_character(&self) -> CharacterData {
         CharacterData::with_appearance(
             self.name.trim().to_string(),
+            self.sex,
             self.appearance.clone(),
         )
     }
@@ -226,7 +234,14 @@ impl CharacterCreator {
                 ui.separator();
                 ui.add_space(10.0);
 
-                // Tab content
+                // Tab content - snapshot appearance before rendering to detect changes
+                let appearance_before = self.appearance.body.height.to_bits()
+                    ^ self.appearance.body.build.to_bits()
+                    ^ self.appearance.body.shoulder_width.to_bits()
+                    ^ self.appearance.body.hip_width.to_bits()
+                    ^ self.appearance.skin.tone.to_bits()
+                    ^ self.appearance.skin.undertone.to_bits();
+
                 ScrollArea::vertical()
                     .max_height(available.y - 200.0)
                     .show(ui, |ui| match self.current_tab {
@@ -237,6 +252,18 @@ impl CharacterCreator {
                         CreatorTab::Skin => self.render_skin_tab(ui),
                         CreatorTab::Preview => self.render_preview_tab(ui),
                     });
+
+                // Check if appearance-affecting values changed
+                let appearance_after = self.appearance.body.height.to_bits()
+                    ^ self.appearance.body.build.to_bits()
+                    ^ self.appearance.body.shoulder_width.to_bits()
+                    ^ self.appearance.body.hip_width.to_bits()
+                    ^ self.appearance.skin.tone.to_bits()
+                    ^ self.appearance.skin.undertone.to_bits();
+
+                if appearance_before != appearance_after {
+                    self.appearance_dirty = true;
+                }
 
                 ui.add_space(20.0);
 
@@ -312,7 +339,7 @@ impl CharacterCreator {
         transition
     }
 
-    /// Render the basics tab (name only - archetype chosen later in gameplay)
+    /// Render the basics tab (name + sex selection)
     fn render_basics_tab(&mut self, ui: &mut Ui) {
         section_header(ui, "Character Name");
 
@@ -325,6 +352,40 @@ impl CharacterCreator {
             );
             if response.changed() {
                 self.name_error = None;
+            }
+        });
+
+        ui.add_space(20.0);
+
+        // Sex selection
+        section_header(ui, "Body Type");
+
+        ui.horizontal(|ui| {
+            let button_size = Vec2::new(100.0, 36.0);
+
+            let male_color = if self.sex == Sex::Male {
+                Color32::from_rgb(60, 80, 130)
+            } else {
+                Color32::from_rgb(45, 45, 60)
+            };
+            let female_color = if self.sex == Sex::Female {
+                Color32::from_rgb(60, 80, 130)
+            } else {
+                Color32::from_rgb(45, 45, 60)
+            };
+
+            if action_button(ui, "Male", button_size, male_color) && self.sex != Sex::Male {
+                self.sex = Sex::Male;
+                self.appearance = CharacterAppearance::default_male();
+                self.appearance_dirty = true;
+            }
+
+            ui.add_space(10.0);
+
+            if action_button(ui, "Female", button_size, female_color) && self.sex != Sex::Female {
+                self.sex = Sex::Female;
+                self.appearance = CharacterAppearance::default_female();
+                self.appearance_dirty = true;
             }
         });
 
@@ -791,13 +852,16 @@ impl CharacterCreator {
                 );
 
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    if !self.name.is_empty() {
-                        ui.label(
-                            RichText::new(&self.name)
-                                .font(FontId::proportional(14.0))
-                                .color(Color32::from_rgb(150, 150, 180)),
-                        );
-                    }
+                    let label = if self.name.is_empty() {
+                        self.sex.name().to_string()
+                    } else {
+                        format!("{} ({})", self.name, self.sex.name())
+                    };
+                    ui.label(
+                        RichText::new(label)
+                            .font(FontId::proportional(14.0))
+                            .color(Color32::from_rgb(150, 150, 180)),
+                    );
                 });
             });
 

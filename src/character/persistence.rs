@@ -128,11 +128,11 @@ pub fn has_characters() -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::character::Archetype;
+    use crate::character::Sex;
 
     #[test]
     fn test_save_and_load() {
-        let character = CharacterData::new("TestCharacter".to_string(), Archetype::Vanguard);
+        let character = CharacterData::new("TestCharacter".to_string(), Sex::Male);
         let original_id = character.id.clone();
 
         // Save
@@ -146,7 +146,7 @@ mod tests {
         let loaded = load_character(filename).expect("Failed to load");
         assert_eq!(loaded.id, original_id);
         assert_eq!(loaded.name, "TestCharacter");
-        assert_eq!(loaded.archetype, Archetype::Vanguard);
+        assert_eq!(loaded.sex, Sex::Male);
 
         // Cleanup
         delete_character(filename).expect("Failed to delete");

@@ -9,6 +9,23 @@ pub use persistence::save_character;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
+/// Biological sex selection for character base body type
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Sex {
+    #[default]
+    Male,
+    Female,
+}
+
+impl Sex {
+    pub fn name(&self) -> &'static str {
+        match self {
+            Self::Male => "Male",
+            Self::Female => "Female",
+        }
+    }
+}
+
 /// Complete character data
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CharacterData {
@@ -16,6 +33,8 @@ pub struct CharacterData {
     pub id: String,
     /// Character name
     pub name: String,
+    /// Biological sex (base body type)
+    pub sex: Sex,
     /// Character archetype/class (None until chosen in gameplay)
     pub archetype: Option<Archetype>,
     /// Visual appearance
@@ -28,22 +47,28 @@ pub struct CharacterData {
 
 impl CharacterData {
     /// Create a new character with default appearance (no archetype yet)
-    pub fn new(name: String) -> Self {
+    pub fn new(name: String, sex: Sex) -> Self {
+        let appearance = match sex {
+            Sex::Male => CharacterAppearance::default_male(),
+            Sex::Female => CharacterAppearance::default_female(),
+        };
         Self {
             id: uuid::Uuid::new_v4().to_string(),
             name,
+            sex,
             archetype: None,
-            appearance: CharacterAppearance::default(),
+            appearance,
             created_at: Utc::now(),
             play_time: 0,
         }
     }
 
     /// Create a character with custom appearance
-    pub fn with_appearance(name: String, appearance: CharacterAppearance) -> Self {
+    pub fn with_appearance(name: String, sex: Sex, appearance: CharacterAppearance) -> Self {
         Self {
+            sex,
             appearance,
-            ..Self::new(name)
+            ..Self::new(name, sex)
         }
     }
 
@@ -134,6 +159,47 @@ impl Default for CharacterAppearance {
 }
 
 impl CharacterAppearance {
+    /// Default male appearance preset
+    pub fn default_male() -> Self {
+        Self {
+            body: BodyCustomization {
+                height: 0.55,
+                build: 0.5,
+                shoulder_width: 0.6,
+                hip_width: 0.4,
+                ..Default::default()
+            },
+            face: FaceCustomization {
+                jaw: 0.6,
+                face_width: 0.5,
+                brow_thickness: 0.6,
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+    }
+
+    /// Default female appearance preset
+    pub fn default_female() -> Self {
+        Self {
+            body: BodyCustomization {
+                height: 0.45,
+                build: 0.4,
+                shoulder_width: 0.4,
+                hip_width: 0.6,
+                ..Default::default()
+            },
+            face: FaceCustomization {
+                jaw: 0.4,
+                face_width: 0.45,
+                lip_fullness: 0.6,
+                brow_thickness: 0.4,
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+    }
+
     /// Randomize all appearance values
     pub fn randomize(&mut self) {
         let mut rng = rand::thread_rng();
@@ -469,10 +535,21 @@ mod tests {
 
     #[test]
     fn test_character_creation() {
-        let character = CharacterData::new("Test".to_string());
+        let character = CharacterData::new("Test".to_string(), Sex::Male);
         assert_eq!(character.name, "Test");
+        assert_eq!(character.sex, Sex::Male);
         assert_eq!(character.archetype, None);
         assert_eq!(character.play_time, 0);
+    }
+
+    #[test]
+    fn test_sex_defaults() {
+        let male = CharacterAppearance::default_male();
+        let female = CharacterAppearance::default_female();
+        // Male should have broader shoulders
+        assert!(male.body.shoulder_width > female.body.shoulder_width);
+        // Female should have wider hips
+        assert!(female.body.hip_width > male.body.hip_width);
     }
 
     #[test]

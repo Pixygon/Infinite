@@ -1041,6 +1041,33 @@ impl InfiniteApp {
 
         // Character creator 3D preview
         if matches!(self.app_state, ApplicationState::CharacterCreation) {
+            // Regenerate capsule mesh if appearance changed
+            if self.character_creator.appearance_dirty {
+                let appearance = &self.character_creator.appearance;
+                let mesh_data = infinite_render::Mesh::character_capsule(
+                    appearance.body.height,
+                    appearance.body.build,
+                    appearance.body.shoulder_width,
+                    appearance.body.hip_width,
+                    appearance.skin.tone,
+                    appearance.skin.undertone,
+                );
+
+                match create_mesh_buffers(
+                    render_ctx.memory_allocator.clone(),
+                    &mesh_data.vertices,
+                    &mesh_data.indices,
+                ) {
+                    Ok(buffers) => {
+                        render_ctx.capsule_mesh = Some(buffers);
+                    }
+                    Err(e) => {
+                        tracing::error!("Failed to rebuild character mesh: {}", e);
+                    }
+                }
+                self.character_creator.appearance_dirty = false;
+            }
+
             // Check if we have a preview rect from egui
             let preview_rect: Option<[f32; 4]> = gui.egui_winit.egui_ctx().data(|data: &egui::util::IdTypeMap| {
                 data.get_temp(egui::Id::new("character_preview_rect"))
