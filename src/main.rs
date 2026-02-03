@@ -63,7 +63,7 @@ use infinite_core::{GameTime, Timeline};
 use infinite_game::{CameraController, InputHandler, PlayerController};
 use infinite_physics::PhysicsWorld;
 use infinite_render::{BasicPushConstants, Mesh, SkyMesh, SkyPushConstants, Vertex3D, SkyVertex};
-use infinite_world::{Terrain, TerrainConfig, TimeOfDay, Weather};
+use infinite_world::{Terrain, TerrainConfig, TimeOfDay, Weather, WeatherState};
 
 use crate::character::CharacterData;
 use crate::settings::GameSettings;
@@ -681,41 +681,131 @@ impl InfiniteApp {
                             }
                             ApplicationState::Paused => self.pause_menu.render(ui),
                             ApplicationState::Playing => {
-                                // Game HUD - minimal when cursor is captured
-                                let player_pos = self.player.as_ref()
-                                    .map(|p| p.position())
-                                    .unwrap_or(glam::Vec3::ZERO);
-                                let grounded = self.player.as_ref()
-                                    .map(|p| p.is_grounded())
-                                    .unwrap_or(false);
-                                let camera_mode = self.camera.as_ref()
-                                    .map(|c| c.mode.is_first_person())
-                                    .unwrap_or(false);
+                                // Player stats (placeholder values for now)
+                                let hp = 85.0f32;
+                                let max_hp = 100.0f32;
+                                let mana = 60.0f32;
+                                let max_mana = 100.0f32;
+                                let level = 1u32;
 
-                                // Top-left info panel
-                                egui::Area::new(egui::Id::new("game_hud"))
+                                // Get time and weather info
+                                let time_str = self.time_of_day.formatted_time();
+                                let period = self.time_of_day.period_name();
+                                let weather_name = self.weather.current.name();
+
+                                // Top-left: HP, Level, Mana
+                                egui::Area::new(egui::Id::new("player_stats"))
                                     .fixed_pos([10.0, 10.0])
                                     .show(&ctx, |ui| {
                                         egui::Frame::new()
-                                            .fill(egui::Color32::from_rgba_unmultiplied(0, 0, 0, 180))
-                                            .corner_radius(5.0)
-                                            .inner_margin(10.0)
+                                            .fill(egui::Color32::from_rgba_unmultiplied(0, 0, 0, 200))
+                                            .corner_radius(8.0)
+                                            .inner_margin(12.0)
                                             .show(ui, |ui| {
-                                                ui.label(format!("Era: {}", era_name));
-                                                ui.label(format!("Time: {:.1}s", game_time));
-                                                ui.separator();
-                                                ui.label(format!(
-                                                    "Pos: ({:.1}, {:.1}, {:.1})",
-                                                    player_pos.x, player_pos.y, player_pos.z
-                                                ));
-                                                ui.label(format!(
-                                                    "Grounded: {}",
-                                                    if grounded { "Yes" } else { "No" }
-                                                ));
-                                                ui.label(format!(
-                                                    "View: {}",
-                                                    if camera_mode { "FPS" } else { "Third Person" }
-                                                ));
+                                                ui.set_min_width(180.0);
+
+                                                // Level
+                                                ui.label(
+                                                    egui::RichText::new(format!("Level {}", level))
+                                                        .font(egui::FontId::proportional(18.0))
+                                                        .color(egui::Color32::from_rgb(255, 215, 0))
+                                                );
+
+                                                ui.add_space(8.0);
+
+                                                // HP Bar
+                                                ui.horizontal(|ui| {
+                                                    ui.label(
+                                                        egui::RichText::new("HP")
+                                                            .font(egui::FontId::proportional(12.0))
+                                                            .color(egui::Color32::from_rgb(200, 80, 80))
+                                                    );
+                                                    ui.label(
+                                                        egui::RichText::new(format!("{:.0}/{:.0}", hp, max_hp))
+                                                            .font(egui::FontId::proportional(12.0))
+                                                            .color(egui::Color32::from_rgb(180, 180, 180))
+                                                    );
+                                                });
+                                                let hp_rect = ui.available_rect_before_wrap();
+                                                let hp_bar_rect = egui::Rect::from_min_size(
+                                                    hp_rect.min,
+                                                    egui::vec2(160.0, 12.0)
+                                                );
+                                                ui.painter().rect_filled(hp_bar_rect, 3.0, egui::Color32::from_rgb(60, 20, 20));
+                                                let hp_fill = egui::Rect::from_min_size(
+                                                    hp_bar_rect.min,
+                                                    egui::vec2(160.0 * (hp / max_hp), 12.0)
+                                                );
+                                                ui.painter().rect_filled(hp_fill, 3.0, egui::Color32::from_rgb(200, 50, 50));
+                                                ui.allocate_space(egui::vec2(160.0, 12.0));
+
+                                                ui.add_space(6.0);
+
+                                                // Mana Bar
+                                                ui.horizontal(|ui| {
+                                                    ui.label(
+                                                        egui::RichText::new("MP")
+                                                            .font(egui::FontId::proportional(12.0))
+                                                            .color(egui::Color32::from_rgb(80, 120, 200))
+                                                    );
+                                                    ui.label(
+                                                        egui::RichText::new(format!("{:.0}/{:.0}", mana, max_mana))
+                                                            .font(egui::FontId::proportional(12.0))
+                                                            .color(egui::Color32::from_rgb(180, 180, 180))
+                                                    );
+                                                });
+                                                let mana_rect = ui.available_rect_before_wrap();
+                                                let mana_bar_rect = egui::Rect::from_min_size(
+                                                    mana_rect.min,
+                                                    egui::vec2(160.0, 12.0)
+                                                );
+                                                ui.painter().rect_filled(mana_bar_rect, 3.0, egui::Color32::from_rgb(20, 30, 60));
+                                                let mana_fill = egui::Rect::from_min_size(
+                                                    mana_bar_rect.min,
+                                                    egui::vec2(160.0 * (mana / max_mana), 12.0)
+                                                );
+                                                ui.painter().rect_filled(mana_fill, 3.0, egui::Color32::from_rgb(50, 100, 200));
+                                                ui.allocate_space(egui::vec2(160.0, 12.0));
+                                            });
+                                    });
+
+                                // Top-right: Time of day + Weather
+                                egui::Area::new(egui::Id::new("time_weather"))
+                                    .anchor(egui::Align2::RIGHT_TOP, [-10.0, 10.0])
+                                    .show(&ctx, |ui| {
+                                        egui::Frame::new()
+                                            .fill(egui::Color32::from_rgba_unmultiplied(0, 0, 0, 200))
+                                            .corner_radius(8.0)
+                                            .inner_margin(12.0)
+                                            .show(ui, |ui| {
+                                                ui.with_layout(egui::Layout::top_down(egui::Align::RIGHT), |ui| {
+                                                    // Time
+                                                    ui.label(
+                                                        egui::RichText::new(&time_str)
+                                                            .font(egui::FontId::proportional(24.0))
+                                                            .color(egui::Color32::from_rgb(255, 255, 200))
+                                                    );
+                                                    ui.label(
+                                                        egui::RichText::new(period)
+                                                            .font(egui::FontId::proportional(14.0))
+                                                            .color(egui::Color32::from_rgb(180, 180, 150))
+                                                    );
+
+                                                    ui.add_space(4.0);
+
+                                                    // Weather
+                                                    let weather_color = match self.weather.current {
+                                                        infinite_world::WeatherState::Clear => egui::Color32::from_rgb(135, 206, 250),
+                                                        infinite_world::WeatherState::Cloudy => egui::Color32::from_rgb(180, 180, 190),
+                                                        infinite_world::WeatherState::Rain => egui::Color32::from_rgb(100, 130, 180),
+                                                        infinite_world::WeatherState::Storm => egui::Color32::from_rgb(80, 80, 120),
+                                                    };
+                                                    ui.label(
+                                                        egui::RichText::new(weather_name)
+                                                            .font(egui::FontId::proportional(14.0))
+                                                            .color(weather_color)
+                                                    );
+                                                });
                                             });
                                     });
 
@@ -724,7 +814,7 @@ impl InfiniteApp {
                                     .anchor(egui::Align2::CENTER_BOTTOM, [0.0, -20.0])
                                     .show(&ctx, |ui| {
                                         ui.label(
-                                            egui::RichText::new("WASD: Move | Space: Jump | Shift: Sprint | Scroll: Zoom | ESC: Pause")
+                                            egui::RichText::new("WASD: Move | Space: Jump | Shift: Sprint | Scroll: Zoom | ESC: Pause | T: Pause Time | Y: Weather | U: +1 Hour")
                                                 .color(egui::Color32::from_rgba_unmultiplied(150, 150, 170, 200))
                                                 .font(egui::FontId::proportional(12.0)),
                                         );
@@ -1127,7 +1217,18 @@ impl ApplicationHandler for InfiniteApp {
 
         // Create 3D pipelines
         let basic_pipeline = create_basic_pipeline(device.clone(), render_pass.clone());
+        if basic_pipeline.is_none() {
+            tracing::error!("Failed to create basic 3D pipeline!");
+        } else {
+            info!("Basic 3D pipeline created successfully");
+        }
+
         let sky_pipeline = create_sky_pipeline(device.clone(), render_pass.clone());
+        if sky_pipeline.is_none() {
+            tracing::error!("Failed to create sky pipeline!");
+        } else {
+            info!("Sky pipeline created successfully");
+        }
 
         // Create capsule mesh for player/preview
         let capsule_mesh_data = Mesh::capsule(1.8, 0.4, 16, 16, [0.6, 0.7, 0.8, 1.0]);

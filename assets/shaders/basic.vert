@@ -12,6 +12,8 @@ layout(push_constant) uniform PushConstants {
     mat4 model;
     mat4 view;
     mat4 projection;
+    vec4 sun_direction;   // xyz = direction, w = intensity
+    vec4 sun_color;       // xyz = color, w = ambient intensity
 } pc;
 
 void main() {

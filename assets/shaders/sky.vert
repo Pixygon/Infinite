@@ -7,10 +7,10 @@ layout(location = 0) out vec3 v_direction;
 layout(push_constant) uniform PushConstants {
     mat4 view;
     mat4 projection;
-    vec4 sun_direction;
-    vec4 sky_zenith;      // rgb = zenith color, a = unused
-    vec4 sky_horizon;     // rgb = horizon color, a = unused
-    vec4 sun_params;      // x = sun size, y = sun glow, z = time_of_day, w = unused
+    vec4 sun_direction;   // xyz = direction, w = intensity (for stars)
+    vec4 sky_zenith;      // rgb = zenith color
+    vec4 sky_horizon;     // rgb = horizon color
+    vec4 sun_params;      // x = sun size, y = sun glow, z = time_of_day
 } pc;
 
 void main() {
