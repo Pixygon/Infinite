@@ -9,4 +9,8 @@ description = "Game logic for Infinite"
 [dependencies]
 infinite-core.workspace = true
 infinite-ecs.workspace = true
+infinite-physics.workspace = true
+rapier3d.workspace = true
 serde.workspace = true
+glam.workspace = true
+winit.workspace = true

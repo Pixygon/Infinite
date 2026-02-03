@@ -9,4 +9,6 @@ description = "Vulkan renderer with ray tracing for the Infinite engine"
 [dependencies]
 infinite-core.workspace = true
 vulkano.workspace = true
-ash.workspace = true
+vulkano-shaders.workspace = true
+glam.workspace = true
+bytemuck.workspace = true

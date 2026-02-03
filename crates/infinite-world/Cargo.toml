@@ -8,4 +8,6 @@ description = "World and timeline system for the Infinite engine"
 
 [dependencies]
 infinite-core.workspace = true
+glam.workspace = true
 serde.workspace = true
+noise.workspace = true

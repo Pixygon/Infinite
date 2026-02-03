@@ -9,3 +9,5 @@ description = "Physics system for the Infinite engine using rapier3d"
 [dependencies]
 infinite-core.workspace = true
 rapier3d.workspace = true
+glam.workspace = true
+nalgebra.workspace = true

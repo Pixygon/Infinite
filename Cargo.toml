@@ -34,12 +34,16 @@ infinite-game = { path = "crates/infinite-game" }
 infinite-integration = { path = "crates/infinite-integration" }
 
 # Vulkan
-vulkano = "0.34"
-vulkano-shaders = "0.34"
+vulkano = "0.35"
+vulkano-shaders = "0.35"
 ash = "0.38"
 
+# Additional rendering
+bytemuck = { version = "1.18", features = ["derive"] }
+noise = "0.9"
+
 # Windowing
-winit = "0.28"
+winit = "0.30"
 
 # Math
 glam = { version = "0.29", features = ["serde"] }
@@ -62,8 +66,9 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
 # UI
-egui = "0.24"
-egui-winit = "0.24"
+egui = "0.31"
+egui-winit = "0.31"
+egui_winit_vulkano = "0.28"
 
 # Utility
 tracing = "0.1"
@@ -72,6 +77,8 @@ anyhow = "1"
 thiserror = "2"
 uuid = { version = "1", features = ["v4", "serde"] }
 parking_lot = "0.12"
+toml = "0.8"
+dirs = "5"
 
 [package]
 name = "infinite"
@@ -82,12 +89,27 @@ license.workspace = true
 
 [dependencies]
 infinite-core.workspace = true
+infinite-game.workspace = true
+infinite-physics.workspace = true
+infinite-render.workspace = true
+infinite-world.workspace = true
 vulkano.workspace = true
+vulkano-shaders.workspace = true
+bytemuck.workspace = true
 winit.workspace = true
 glam.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 anyhow.workspace = true
+egui.workspace = true
+egui_winit_vulkano.workspace = true
+toml.workspace = true
+dirs.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+uuid.workspace = true
+rand = "0.8"
+chrono = { version = "0.4", features = ["serde"] }
 
 [[bin]]
 name = "infinite"
