@@ -10,3 +10,6 @@ description = "Asset loading and management for the Infinite engine"
 infinite-core.workspace = true
 gltf.workspace = true
 image.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+serde.workspace = true

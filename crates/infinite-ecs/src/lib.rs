@@ -1,7 +1,16 @@
 //! Infinite ECS - Entity Component System
 //!
-//! A custom ECS implementation inspired by Bevy, optimized for the Infinite engine.
+//! A custom ECS implementation optimized for the Infinite engine.
+//! Uses generational indices for entities and sparse-set storage for components.
 
-pub fn init() {
-    // TODO: Implement ECS
-}
+mod component;
+mod entity;
+mod query;
+mod resource;
+mod system;
+mod world;
+
+pub use entity::Entity;
+pub use query::WorldQuery;
+pub use system::{System, SystemSchedule};
+pub use world::World;

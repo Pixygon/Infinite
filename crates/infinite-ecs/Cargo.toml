@@ -9,3 +9,4 @@ description = "Entity Component System for the Infinite engine"
 [dependencies]
 infinite-core.workspace = true
 parking_lot.workspace = true
+thiserror.workspace = true

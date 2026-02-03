@@ -9,3 +9,6 @@ description = "Audio system for the Infinite engine using kira"
 [dependencies]
 infinite-core.workspace = true
 kira.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+glam.workspace = true
