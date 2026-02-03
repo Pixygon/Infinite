@@ -1,8 +1,64 @@
-# Infinite - AI Agent Instructions
+# Infinite - Vulkan Game Engine
 
-## Project Overview
+## Overview
+A Rust/Vulkan game engine with ray tracing for a time-travel themed game where players traverse different eras (past, present, future).
 
-Infinite is a Vulkan-based game engine in Rust. The engine powers a time-travel themed game where players can traverse different eras (past, present, future).
+## Project Structure
+```
+src/                          # Main application
+├── main.rs                   # Entry point, Vulkan + egui
+├── state.rs                  # ApplicationState machine
+├── settings.rs               # GameSettings persistence
+├── character/                # Character data and creator
+│   ├── mod.rs                # Character data structures
+│   └── persistence.rs        # Save/load characters
+└── ui/                       # egui UI screens
+    ├── mod.rs                # UI module exports
+    ├── loading_screen.rs     # Animated loading
+    ├── main_menu.rs          # Title screen
+    ├── pause_menu.rs         # In-game pause
+    ├── settings_menu.rs      # Settings tabs
+    └── character_creator.rs  # Character customization
+
+crates/
+├── infinite-core/            # Types, math, time system
+├── infinite-ecs/             # Entity Component System
+├── infinite-render/          # Vulkan renderer
+├── infinite-physics/         # rapier3d physics
+│   ├── lib.rs                # PhysicsWorld
+│   └── character_controller.rs # Player physics
+├── infinite-audio/           # kira audio
+├── infinite-world/           # World/era management
+├── infinite-net/             # WebSocket networking
+├── infinite-assets/          # glTF/texture loading
+├── infinite-game/            # Game logic
+│   ├── lib.rs                # Module exports
+│   ├── input.rs              # Input action system
+│   ├── player/               # Player controller
+│   │   ├── mod.rs
+│   │   ├── movement.rs       # Movement config
+│   │   └── controller.rs     # Player controller
+│   └── camera/               # Camera system
+│       ├── mod.rs
+│       ├── config.rs         # Camera config
+│       └── controller.rs     # Camera controller
+└── infinite-integration/     # PixygonServer client
+```
+
+## Building & Running
+```bash
+cargo build              # Build
+cargo run                # Run
+cargo test               # Test
+cargo clippy             # Lint
+```
+
+## Tech Stack
+- Rust, Vulkan (vulkano 0.35), winit 0.30
+- egui 0.31 + egui_winit_vulkano
+- rapier3d 0.22 (physics)
+- kira 0.9 (audio)
+- glam 0.29 (math)
 
 ## Crate Structure
 
@@ -11,31 +67,58 @@ Infinite is a Vulkan-based game engine in Rust. The engine powers a time-travel 
 | `infinite-core` | Core types (Transform, Color, EntityId), time system (Era, Timeline, GameTime) |
 | `infinite-ecs` | Entity Component System |
 | `infinite-render` | Vulkan renderer with ray tracing |
-| `infinite-physics` | Physics via rapier3d |
+| `infinite-physics` | Physics via rapier3d, character controller |
 | `infinite-audio` | Audio via kira |
 | `infinite-world` | World chunks, era management, time portals |
 | `infinite-net` | Networking, prediction, server sync |
 | `infinite-assets` | glTF loading, textures, caching |
-| `infinite-game` | Game logic (monsters, battles, quests) |
+| `infinite-game` | Player controller, camera, input system |
 | `infinite-integration` | PixygonServer API client |
 
-## Building
+## Application States
 
-```bash
-cargo build              # Build all crates
-cargo run                # Run the game
-cargo test               # Run all tests
-cargo check              # Fast type checking
+```rust
+pub enum ApplicationState {
+    Loading(LoadingPhase),              // Loading with progress
+    MainMenu,                            // Title screen
+    CharacterCreation,                   // Character creator
+    Settings { return_to: Box<...> },    // Nested settings
+    Paused,                              // Game paused
+    Playing,                             // Active gameplay
+    Exiting,                             // Shutdown
+}
 ```
 
-## Key Dependencies
+## Controls
 
-- **vulkano 0.34** - Safe Vulkan bindings
-- **winit 0.28** - Window management
-- **rapier3d** - Physics simulation
-- **kira** - Audio playback
-- **glam** - Math (vectors, matrices, quaternions)
-- **tokio** - Async runtime for networking
+| Input | Action |
+|-------|--------|
+| W/A/S/D | Move |
+| Space | Jump |
+| Shift | Sprint |
+| Mouse | Look |
+| Scroll | Zoom (FPS ↔ Third-person) |
+| ESC | Pause |
+| E | Interact |
+
+## Pixygon Agent Integration
+
+**Project ID**: `6981e8eda259e89734bd007a`
+
+### Git Workflow
+```bash
+git checkout main && git pull
+git checkout -b feature/<task-description>
+# ... work ...
+git add -A && git commit -m "feat: description"
+git push origin HEAD
+```
+
+### Development Guidelines
+1. Run `cargo test` before committing
+2. Run `cargo clippy` for lints
+3. Follow existing code patterns
+4. Document public APIs with rustdoc
 
 ## Time Travel System
 
@@ -66,13 +149,6 @@ The game integrates with PixygonServer for:
 - Monster/Character persistence (existing models)
 - Multiplayer state sync
 - Leaderboards and achievements
-
-## Development Guidelines
-
-1. **Modularity**: Each crate has a single responsibility
-2. **Safety**: Prefer vulkano's safe abstractions, use ash only for performance-critical paths
-3. **Testing**: Write tests for all game logic
-4. **Documentation**: Document public APIs with rustdoc
 
 ## Related Projects
 

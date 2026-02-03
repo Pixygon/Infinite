@@ -228,8 +228,18 @@ impl InfiniteApp {
         };
         let terrain = Terrain::generate(terrain_config);
 
-        // Create ground at base terrain level
-        physics.create_ground(terrain.min_height - 0.5);
+        // Create terrain heightfield collider for proper collision
+        let (nrows, ncols) = terrain.physics_dimensions();
+        let heights = terrain.physics_heights();
+        physics.create_heightfield(
+            &heights,
+            nrows,
+            ncols,
+            Vec3::new(terrain.config.size, 1.0, terrain.config.size),
+        );
+
+        // Create a fallback ground plane well below terrain as safety net
+        physics.create_ground(terrain.min_height - 10.0);
 
         // Create some test obstacles
         physics.create_static_box(Vec3::new(2.0, 1.0, 2.0), Vec3::new(10.0, 1.0 + terrain.height_at(10.0, 0.0), 0.0));

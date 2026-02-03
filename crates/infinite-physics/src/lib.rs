@@ -233,6 +233,34 @@ impl PhysicsWorld {
         self.add_static_collider(ground)
     }
 
+    /// Create a terrain heightfield collider from height data
+    ///
+    /// - `heights`: row-major height values (nrows * ncols), Z-outer X-inner
+    /// - `nrows`: number of rows (Z axis vertex count)
+    /// - `ncols`: number of columns (X axis vertex count)
+    /// - `scale`: world-space size (x = total X size, y = height scale, z = total Z size)
+    pub fn create_heightfield(
+        &mut self,
+        heights: &[f32],
+        nrows: usize,
+        ncols: usize,
+        scale: Vec3,
+    ) -> ColliderHandle {
+        use nalgebra::DMatrix;
+
+        // rapier3d heightfield expects DMatrix<Real> with nrows x ncols
+        let matrix = DMatrix::from_fn(nrows, ncols, |r, c| {
+            heights[r * ncols + c]
+        });
+
+        let collider = ColliderBuilder::heightfield(matrix, vector![scale.x, scale.y, scale.z])
+            .friction(0.7)
+            .restitution(0.0)
+            .build();
+
+        self.add_static_collider(collider)
+    }
+
     /// Create a static box collider
     pub fn create_static_box(&mut self, half_extents: Vec3, position: Vec3) -> ColliderHandle {
         let collider = ColliderBuilder::cuboid(half_extents.x, half_extents.y, half_extents.z)
