@@ -15,6 +15,8 @@ pub enum ApplicationState {
     Settings { return_to: Box<ApplicationState> },
     /// Game is paused
     Paused,
+    /// Save/Load menu (accessed from pause)
+    SaveLoad { is_saving: bool },
     /// Active gameplay
     Playing,
     /// Application is exiting

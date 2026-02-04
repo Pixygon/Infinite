@@ -3,6 +3,7 @@
 //! This is the main entry point for the Infinite engine and game.
 
 mod character;
+mod save;
 mod settings;
 mod state;
 mod ui;
@@ -66,15 +67,26 @@ use winit::{
 
 use glam::{Mat4, Vec3};
 use infinite_core::{GameTime, Timeline};
-use infinite_game::{CameraController, InputHandler, PlayerController};
+use infinite_game::{
+    CameraController, InputAction, InputHandler, Interactable, InteractableId, InteractionResult,
+    InteractionSystem, NpcId, PlayerController,
+};
+use infinite_game::npc::combat::PlayerCombatState;
+use infinite_game::npc::dialogue::DialogueSystem;
+use infinite_game::npc::manager::NpcManager;
 use infinite_physics::PhysicsWorld;
 use infinite_render::{BasicPushConstants, Mesh, SkyMesh, SkyPushConstants, Vertex3D, SkyVertex};
-use infinite_world::{Terrain, TerrainConfig, TimeOfDay, Weather, WeatherState};
+use infinite_world::{
+    ChunkConfig, ChunkCoord, ChunkManager, EraTerrainConfig, Terrain, TerrainConfig, TimeOfDay,
+    Weather, WeatherState,
+};
 
 use crate::character::CharacterData;
+use crate::save::{SaveData, PlayerSaveData, WorldSaveData};
 use crate::settings::GameSettings;
 use crate::state::{ApplicationState, StateTransition};
-use crate::ui::{CharacterCreator, LoadingScreen, MainMenu, PauseMenu, SettingsMenu};
+use crate::ui::{CharacterCreator, LoadingScreen, MainMenu, PauseMenu, SaveLoadAction, SaveLoadMenu, SettingsMenu};
+use std::collections::HashMap;
 
 /// Mesh buffers for GPU rendering
 struct MeshBuffers {
@@ -115,6 +127,10 @@ struct RenderContext {
     // Mesh buffers
     capsule_mesh: Option<MeshBuffers>,
     terrain_mesh: Option<MeshBuffers>,
+    /// Per-chunk terrain meshes (keyed by ChunkCoord)
+    chunk_meshes: HashMap<ChunkCoord, MeshBuffers>,
+    /// Shared NPC capsule mesh (reused for all NPCs with per-NPC push constants)
+    npc_capsule_mesh: Option<MeshBuffers>,
     sky_mesh: Option<SkyMeshBuffers>,
     debug_capsule_mesh: Option<MeshBuffers>,
 }
@@ -151,6 +167,8 @@ struct InfiniteApp {
     pause_menu: PauseMenu,
     /// Settings menu UI (created when needed)
     settings_menu: Option<SettingsMenu>,
+    /// Save/Load menu UI (created when needed)
+    save_load_menu: Option<SaveLoadMenu>,
     /// Character creator UI
     character_creator: CharacterCreator,
     /// Current character (when playing)
@@ -171,12 +189,54 @@ struct InfiniteApp {
     cursor_captured: bool,
 
     // World systems
-    /// Terrain data
+    /// Terrain data (legacy single terrain, kept for reference)
     terrain: Option<Terrain>,
+    /// Chunk manager for streaming terrain
+    chunk_manager: Option<ChunkManager>,
     /// Time of day system
     time_of_day: TimeOfDay,
     /// Weather system
     weather: Weather,
+    /// Interaction system
+    interaction_system: InteractionSystem,
+    /// NPC manager
+    npc_manager: Option<NpcManager>,
+    /// Dialogue system
+    dialogue_system: DialogueSystem,
+    /// Player combat state
+    player_combat: PlayerCombatState,
+    /// Text overlay to show (from sign interactions)
+    interaction_text: Option<String>,
+    /// Timer for hiding interaction text
+    interaction_text_timer: f32,
+    /// Notification text (e.g., "Game Saved")
+    notification_text: Option<String>,
+    /// Timer for hiding notification
+    notification_timer: f32,
+    /// Era transition fade alpha (0.0 = clear, 1.0 = black)
+    era_transition_alpha: f32,
+    /// Target era for pending transition (-1 = none)
+    pending_era_transition: Option<usize>,
+    /// Whether we're in the middle of an era transition
+    era_transitioning: bool,
+    /// Source era index for tinted transition
+    era_transition_source: usize,
+
+    // Climbing state
+    /// Whether the player is currently climbing a ladder
+    climbing: bool,
+    /// Direction of climbing (typically Vec3::Y)
+    climb_direction: Vec3,
+    /// Remaining distance to climb
+    climb_remaining: f32,
+
+    // Collected items (pre-inventory)
+    /// Items the player has collected
+    collected_items: Vec<String>,
+    /// Total play time in seconds
+    play_time: f64,
+    /// Auto-save countdown timer
+    auto_save_timer: f32,
 
     // Debug
     /// Whether the debug overlay is visible
@@ -207,6 +267,7 @@ impl InfiniteApp {
             main_menu: MainMenu::new(),
             pause_menu: PauseMenu::new(),
             settings_menu: None,
+            save_load_menu: None,
             character_creator: CharacterCreator::new(),
             current_character: None,
             loading_timer: 0.0,
@@ -217,8 +278,29 @@ impl InfiniteApp {
             cursor_captured: false,
 
             terrain: None,
+            chunk_manager: None,
             time_of_day: TimeOfDay::default(),
             weather: Weather::default(),
+            interaction_system: InteractionSystem::new(),
+            npc_manager: None,
+            dialogue_system: DialogueSystem::new(),
+            player_combat: PlayerCombatState::new(),
+            interaction_text: None,
+            interaction_text_timer: 0.0,
+            notification_text: None,
+            notification_timer: 0.0,
+            era_transition_alpha: 0.0,
+            pending_era_transition: None,
+            era_transitioning: false,
+            era_transition_source: 3,
+
+            climbing: false,
+            climb_direction: Vec3::ZERO,
+            climb_remaining: 0.0,
+
+            collected_items: Vec::new(),
+            play_time: 0.0,
+            auto_save_timer: 300.0,
 
             debug_visible: false,
             debug_wireframe: false,
@@ -231,56 +313,102 @@ impl InfiniteApp {
         // Create physics world
         let mut physics = PhysicsWorld::new();
 
-        // Generate terrain
+        // Create a fallback ground plane well below terrain as safety net
+        physics.create_ground(-50.0);
+
+        // Set up chunk manager for streaming terrain
+        let chunk_config = ChunkConfig {
+            chunk_size: 64.0,
+            subdivisions: 32,
+            load_radius: 3,
+            unload_radius: 4,
+        };
         let terrain_config = TerrainConfig {
+            size: 64.0, // matches chunk_size
+            subdivisions: 32,
+            max_height: 5.0,
+            noise_scale: 0.02,
+            seed: 42,
+            ..Default::default()
+        };
+
+        let mut chunk_manager = ChunkManager::new(chunk_config.clone(), terrain_config.clone());
+
+        // Apply era config if not Present (index 3)
+        if self.timeline.active_era != 3 {
+            chunk_manager.set_era_config(Some(EraTerrainConfig::for_era(self.timeline.active_era)));
+        }
+
+        // Initial chunk load around spawn
+        let spawn_pos = Vec3::new(0.0, 0.0, 0.0);
+        chunk_manager.update(spawn_pos, &mut physics);
+
+        // Get spawn height from chunk manager
+        let spawn_height = chunk_manager.height_at(0.0, 0.0);
+
+        // Also generate a legacy single terrain for height_at queries outside chunks
+        let legacy_terrain = Terrain::generate(TerrainConfig {
             size: 100.0,
             subdivisions: 64,
             max_height: 5.0,
             noise_scale: 0.02,
             seed: 42,
             ..Default::default()
-        };
-        let terrain = Terrain::generate(terrain_config);
+        });
+        self.terrain = Some(legacy_terrain);
 
-        // Create terrain heightfield collider for proper collision
-        let (nrows, ncols) = terrain.physics_dimensions();
-        let heights = terrain.physics_heights();
-        physics.create_heightfield(
-            &heights,
-            nrows,
-            ncols,
-            Vec3::new(terrain.config.size, 1.0, terrain.config.size),
-        );
-
-        // Create a fallback ground plane well below terrain as safety net
-        physics.create_ground(terrain.min_height - 10.0);
-
-        // Create some test obstacles
-        physics.create_static_box(Vec3::new(2.0, 1.0, 2.0), Vec3::new(10.0, 1.0 + terrain.height_at(10.0, 0.0), 0.0));
-        physics.create_static_box(Vec3::new(1.0, 2.0, 1.0), Vec3::new(-5.0, 2.0 + terrain.height_at(-5.0, 5.0), 5.0));
-
-        // Create terrain mesh buffers
+        // Create chunk terrain meshes for initially loaded chunks
         if let Some(render_ctx) = &mut self.render_ctx {
-            let terrain_mesh_data = Mesh::terrain(
-                terrain.config.size,
-                terrain.config.subdivisions,
-                &terrain.heights,
-                |x, h, z| terrain.color_at(x, h, z),
-            );
+            for chunk in chunk_manager.loaded_chunks() {
+                let terrain = &chunk.terrain;
+                let terrain_mesh_data = Mesh::terrain(
+                    terrain.config.size,
+                    terrain.config.subdivisions,
+                    &terrain.heights,
+                    |x, h, z| terrain.color_at(x, h, z),
+                );
 
-            if let Ok(buffers) = create_mesh_buffers(
-                render_ctx.memory_allocator.clone(),
-                &terrain_mesh_data.vertices,
-                &terrain_mesh_data.indices,
-            ) {
-                render_ctx.terrain_mesh = Some(buffers);
+                if let Ok(buffers) = create_mesh_buffers(
+                    render_ctx.memory_allocator.clone(),
+                    &terrain_mesh_data.vertices,
+                    &terrain_mesh_data.indices,
+                ) {
+                    render_ctx.chunk_meshes.insert(chunk.coord, buffers);
+                }
             }
         }
 
-        self.terrain = Some(terrain);
+        // Create NPC manager and spawn NPCs for initial chunks
+        let mut npc_manager = NpcManager::new(chunk_config.chunk_size);
+        let era_index = self.timeline.active_era;
+        for chunk in chunk_manager.loaded_chunks() {
+            let coord = chunk.coord;
+            let cm_ref = &chunk_manager;
+            npc_manager.on_chunk_loaded(coord, era_index, |x, z| cm_ref.height_at(x, z));
+        }
+        self.npc_manager = Some(npc_manager);
 
-        // Create player - spawn above terrain center
-        let spawn_height = self.terrain.as_ref().map(|t| t.height_at(0.0, 0.0)).unwrap_or(0.0);
+        // Create NPC capsule mesh (smaller than player)
+        if let Some(render_ctx) = &mut self.render_ctx {
+            if render_ctx.npc_capsule_mesh.is_none() {
+                let npc_mesh_data = Mesh::capsule(1.6, 0.35, 12, 8, [1.0, 1.0, 1.0, 1.0]);
+                if let Ok(buffers) = create_mesh_buffers(
+                    render_ctx.memory_allocator.clone(),
+                    &npc_mesh_data.vertices,
+                    &npc_mesh_data.indices,
+                ) {
+                    render_ctx.npc_capsule_mesh = Some(buffers);
+                }
+            }
+        }
+
+        self.chunk_manager = Some(chunk_manager);
+
+        // Reset dialogue and combat state
+        self.dialogue_system = DialogueSystem::new();
+        self.player_combat = PlayerCombatState::new();
+
+        // Create player - spawn above terrain
         let mut player = PlayerController::new();
         player.spawn(&mut physics, Vec3::new(0.0, spawn_height + 2.0, 0.0));
 
@@ -294,7 +422,52 @@ impl InfiniteApp {
         self.player = Some(player);
         self.camera = Some(camera);
 
-        info!("Game systems initialized with terrain");
+        // Set up test interactables
+        self.interaction_system.clear();
+        self.interaction_system.add(Interactable::sign(
+            Vec3::new(5.0, spawn_height + 1.0, 5.0),
+            "Welcome to Infinite!\nExplore the world, travel through time.",
+        ));
+        self.interaction_system.add(Interactable::sign(
+            Vec3::new(-10.0, spawn_height + 1.0, 0.0),
+            "The terrain stretches infinitely in all directions.\nChunks load and unload as you walk.",
+        ));
+        // Era portals for testing
+        self.interaction_system.add(Interactable::era_portal(
+            Vec3::new(20.0, spawn_height + 1.0, 0.0),
+            0,
+            "Ancient Era",
+        ));
+        self.interaction_system.add(Interactable::era_portal(
+            Vec3::new(20.0, spawn_height + 1.0, 10.0),
+            5,
+            "Far Future",
+        ));
+
+        // Stateful interactables for testing
+        let locked_door_id = self.interaction_system.add_door(
+            Vec3::new(10.0, spawn_height + 1.0, -5.0),
+            true, // locked
+        );
+        self.interaction_system.add_door(
+            Vec3::new(-5.0, spawn_height + 1.0, -5.0),
+            false, // unlocked
+        );
+        self.interaction_system.add_lever(
+            Vec3::new(8.0, spawn_height + 1.0, -5.0),
+            vec![locked_door_id],
+        );
+        self.interaction_system.add_container(
+            Vec3::new(0.0, spawn_height + 0.5, -8.0),
+            vec!["Ancient Coin".to_string(), "Health Potion".to_string()],
+        );
+        self.interaction_system.add_ladder(
+            Vec3::new(-8.0, spawn_height + 0.5, 0.0),
+            6.0,
+            Vec3::Y,
+        );
+
+        info!("Game systems initialized with chunk-based terrain");
     }
 
     /// Cleanup game systems when leaving Playing state
@@ -303,13 +476,141 @@ impl InfiniteApp {
         self.player = None;
         self.camera = None;
         self.terrain = None;
+        self.chunk_manager = None;
+        self.npc_manager = None;
+        self.dialogue_system.end_dialogue();
+        self.interaction_system.clear();
+        self.interaction_text = None;
+        self.notification_text = None;
+        self.era_transitioning = false;
+        self.pending_era_transition = None;
+        self.climbing = false;
+        self.climb_remaining = 0.0;
 
-        // Clear terrain mesh
+        // Clear terrain meshes
         if let Some(render_ctx) = &mut self.render_ctx {
             render_ctx.terrain_mesh = None;
+            render_ctx.chunk_meshes.clear();
         }
 
         info!("Game systems cleaned up");
+    }
+
+    /// Gather all current game state into a SaveData struct
+    fn gather_save_data(&self, slot_name: &str) -> SaveData {
+        let player_pos = self.player.as_ref().map(|p| p.position()).unwrap_or(Vec3::ZERO);
+        let (yaw, pitch) = self.camera.as_ref().map(|c| (c.yaw, c.pitch)).unwrap_or((0.0, 0.0));
+        let char_name = self.current_character.as_ref()
+            .map(|c| c.name.clone())
+            .unwrap_or_else(|| "Player".to_string());
+
+        SaveData {
+            version: 1,
+            player: PlayerSaveData {
+                position: [player_pos.x, player_pos.y, player_pos.z],
+                rotation_yaw: yaw,
+                rotation_pitch: pitch,
+                character_name: char_name,
+            },
+            world: WorldSaveData {
+                era_index: self.timeline.active_era,
+                time_of_day: self.time_of_day.time_hours,
+            },
+            timestamp: chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string(),
+            slot_name: slot_name.to_string(),
+            collected_items: self.collected_items.clone(),
+            play_time_seconds: self.play_time,
+            interactions: self.interaction_system.save_states(),
+        }
+    }
+
+    /// Quick save the game (F5)
+    fn do_quicksave(&mut self) {
+        let data = self.gather_save_data("");
+
+        match save::save_game(&data) {
+            Ok(()) => {
+                self.notification_text = Some("Game Saved".to_string());
+                self.notification_timer = 2.0;
+                info!("Game saved successfully");
+            }
+            Err(e) => {
+                self.notification_text = Some(format!("Save failed: {}", e));
+                self.notification_timer = 3.0;
+                tracing::error!("Failed to save game: {}", e);
+            }
+        }
+    }
+
+    /// Auto-save the game
+    fn do_autosave(&mut self) {
+        let data = self.gather_save_data("Autosave");
+
+        match save::autosave(&data) {
+            Ok(()) => {
+                self.notification_text = Some("Auto-saved".to_string());
+                self.notification_timer = 1.5;
+            }
+            Err(e) => {
+                tracing::error!("Failed to auto-save: {}", e);
+            }
+        }
+    }
+
+    /// Restore game state from save data
+    fn restore_from_save(&mut self, data: SaveData) {
+        // Restore player position
+        if let (Some(player), Some(physics)) = (&mut self.player, &mut self.physics_world) {
+            let pos = Vec3::new(data.player.position[0], data.player.position[1], data.player.position[2]);
+            player.teleport(physics, pos);
+        }
+
+        // Restore camera rotation
+        if let Some(camera) = &mut self.camera {
+            camera.set_yaw(data.player.rotation_yaw);
+            camera.set_pitch(data.player.rotation_pitch);
+        }
+
+        // Restore era (if different)
+        if data.world.era_index != self.timeline.active_era {
+            if !self.era_transitioning {
+                self.era_transition_source = self.timeline.active_era;
+                self.pending_era_transition = Some(data.world.era_index);
+                self.era_transitioning = true;
+                self.era_transition_alpha = 0.0;
+            }
+        }
+
+        // Restore time of day
+        self.time_of_day.set_time(data.world.time_of_day);
+
+        // Restore collected items and play time
+        self.collected_items = data.collected_items;
+        self.play_time = data.play_time_seconds;
+
+        // Restore interaction states
+        self.interaction_system.load_states(data.interactions);
+
+        // Reset climbing state
+        self.climbing = false;
+        self.climb_remaining = 0.0;
+    }
+
+    /// Quick load the game (F9)
+    fn do_quickload(&mut self) {
+        match save::load_game() {
+            Ok(data) => {
+                self.restore_from_save(data);
+                self.notification_text = Some("Game Loaded".to_string());
+                self.notification_timer = 2.0;
+                info!("Game loaded successfully");
+            }
+            Err(e) => {
+                self.notification_text = Some(format!("Load failed: {}", e));
+                self.notification_timer = 3.0;
+                tracing::error!("Failed to load game: {}", e);
+            }
+        }
     }
 
     /// Update cursor capture state
@@ -536,7 +837,111 @@ impl InfiniteApp {
                 self.time_of_day.update(delta);
                 self.weather.update(delta);
 
-                // Fixed timestep physics update
+                // --- Era transition fade ---
+                if self.era_transitioning {
+                    if let Some(target_era) = self.pending_era_transition {
+                        if self.era_transition_alpha < 1.0 {
+                            // Fade to black
+                            self.era_transition_alpha = (self.era_transition_alpha + delta * 2.0).min(1.0);
+                        } else {
+                            // At full black: switch era, regenerate terrain
+                            if let Err(e) = self.timeline.travel_to(target_era) {
+                                tracing::error!("Failed to travel to era {}: {}", target_era, e);
+                            } else {
+                                info!("Switched to era: {}", self.timeline.current_era().name());
+                            }
+
+                            // Regenerate chunks with new era config
+                            let era_config = if target_era == 3 {
+                                None
+                            } else {
+                                Some(EraTerrainConfig::for_era(target_era))
+                            };
+
+                            if let (Some(chunk_manager), Some(physics)) =
+                                (&mut self.chunk_manager, &mut self.physics_world)
+                            {
+                                chunk_manager.set_era_config(era_config);
+                                let player_pos = self.player.as_ref()
+                                    .map(|p| p.position())
+                                    .unwrap_or(Vec3::ZERO);
+                                chunk_manager.reload_all(player_pos, physics);
+                                physics.update_query_pipeline();
+
+                                // Rebuild chunk meshes
+                                if let Some(render_ctx) = &mut self.render_ctx {
+                                    render_ctx.chunk_meshes.clear();
+                                    for chunk in chunk_manager.loaded_chunks() {
+                                        let terrain = &chunk.terrain;
+                                        let mesh_data = Mesh::terrain(
+                                            terrain.config.size,
+                                            terrain.config.subdivisions,
+                                            &terrain.heights,
+                                            |x, h, z| terrain.color_at(x, h, z),
+                                        );
+                                        if let Ok(buffers) = create_mesh_buffers(
+                                            render_ctx.memory_allocator.clone(),
+                                            &mesh_data.vertices,
+                                            &mesh_data.indices,
+                                        ) {
+                                            render_ctx.chunk_meshes.insert(chunk.coord, buffers);
+                                        }
+                                    }
+                                }
+                            }
+
+                            self.pending_era_transition = None;
+
+                            // Auto-save on era transition
+                            if self.settings.gameplay.auto_save {
+                                self.do_autosave();
+                                self.auto_save_timer = self.settings.gameplay.auto_save_interval as f32;
+                            }
+                        }
+                    } else {
+                        // No pending transition, fade back in
+                        self.era_transition_alpha = (self.era_transition_alpha - delta * 2.0).max(0.0);
+                        if self.era_transition_alpha <= 0.0 {
+                            self.era_transitioning = false;
+                        }
+                    }
+                }
+
+                // --- Climbing mode update ---
+                if self.climbing {
+                    let climb_speed = 3.0;
+                    let climb_step = climb_speed * delta;
+
+                    // Check for exit: Jump to dismount, or reached top/bottom
+                    if self.input_handler.state.is_just_pressed(InputAction::Jump)
+                        || self.climb_remaining <= 0.0
+                    {
+                        self.climbing = false;
+                        self.climb_remaining = 0.0;
+                    } else if let (Some(player), Some(physics)) =
+                        (&mut self.player, &mut self.physics_world)
+                    {
+                        // Move player up/down based on W/S input
+                        let move_dir = if self.input_handler.state.is_held(InputAction::MoveForward) {
+                            1.0
+                        } else if self.input_handler.state.is_held(InputAction::MoveBackward) {
+                            -1.0
+                        } else {
+                            0.0
+                        };
+
+                        if move_dir != 0.0 {
+                            let displacement = self.climb_direction * move_dir * climb_step;
+                            let pos = player.position() + displacement;
+                            player.teleport(physics, pos);
+                            if move_dir > 0.0 {
+                                self.climb_remaining -= climb_step;
+                            }
+                        }
+                    }
+                }
+
+                // --- Fixed timestep physics update ---
                 let fixed_dt = self.game_time.config.fixed_timestep;
                 let steps = self.game_time.fixed_steps();
 
@@ -544,20 +949,19 @@ impl InfiniteApp {
                     if let (Some(physics), Some(player), Some(camera)) =
                         (&mut self.physics_world, &mut self.player, &self.camera)
                     {
-                        // Update player with input
-                        player.fixed_update(
-                            physics,
-                            &self.input_handler.state,
-                            camera.yaw,
-                            fixed_dt,
-                        );
-
-                        // Step physics
+                        if !self.climbing {
+                            player.fixed_update(
+                                physics,
+                                &self.input_handler.state,
+                                camera.yaw,
+                                fixed_dt,
+                            );
+                        }
                         physics.step();
                     }
                 }
 
-                // Variable timestep camera update
+                // --- Variable timestep camera update ---
                 if let (Some(physics), Some(player), Some(camera)) =
                     (&self.physics_world, &self.player, &mut self.camera)
                 {
@@ -567,6 +971,220 @@ impl InfiniteApp {
                         Some(physics),
                         delta,
                     );
+                }
+
+                // --- Chunk streaming ---
+                let player_pos = self.player.as_ref().map(|p| p.position()).unwrap_or(Vec3::ZERO);
+                if let (Some(chunk_manager), Some(physics)) =
+                    (&mut self.chunk_manager, &mut self.physics_world)
+                {
+                    chunk_manager.update(player_pos, physics);
+
+                    // Remove meshes for unloaded chunks
+                    if let Some(render_ctx) = &mut self.render_ctx {
+                        for coord in &chunk_manager.newly_unloaded {
+                            render_ctx.chunk_meshes.remove(coord);
+                        }
+
+                        // Create meshes for newly loaded chunks
+                        for coord in &chunk_manager.newly_loaded {
+                            if let Some(chunk) = chunk_manager.get_chunk(coord) {
+                                let terrain = &chunk.terrain;
+                                let mesh_data = Mesh::terrain(
+                                    terrain.config.size,
+                                    terrain.config.subdivisions,
+                                    &terrain.heights,
+                                    |x, h, z| terrain.color_at(x, h, z),
+                                );
+                                if let Ok(buffers) = create_mesh_buffers(
+                                    render_ctx.memory_allocator.clone(),
+                                    &mesh_data.vertices,
+                                    &mesh_data.indices,
+                                ) {
+                                    render_ctx.chunk_meshes.insert(*coord, buffers);
+                                }
+                            }
+                        }
+                    }
+
+                    physics.update_query_pipeline();
+                }
+
+                // --- NPC spawning/despawning with chunks ---
+                if let (Some(npc_manager), Some(chunk_manager)) =
+                    (&mut self.npc_manager, &self.chunk_manager)
+                {
+                    let era_index = self.timeline.active_era;
+
+                    // Despawn NPCs from unloaded chunks
+                    for coord in &chunk_manager.newly_unloaded {
+                        npc_manager.on_chunk_unloaded(*coord);
+                    }
+
+                    // Spawn NPCs for newly loaded chunks
+                    for coord in &chunk_manager.newly_loaded {
+                        let cm_ref = chunk_manager;
+                        npc_manager.on_chunk_loaded(*coord, era_index, |x, z| cm_ref.height_at(x, z));
+                    }
+                }
+
+                // --- NPC update ---
+                if let (Some(npc_manager), Some(chunk_manager)) =
+                    (&mut self.npc_manager, &self.chunk_manager)
+                {
+                    let cm_ref = chunk_manager;
+                    npc_manager.update(delta, player_pos, |x, z| cm_ref.height_at(x, z));
+
+                    // Sync NPC positions to interaction system:
+                    // Remove old NPC interactables
+                    self.interaction_system.retain(|i| {
+                        !matches!(i.kind, infinite_game::InteractableKind::Npc { .. })
+                    });
+
+                    // Add current NPC interactables (non-hostile only)
+                    for npc in npc_manager.npcs_iter() {
+                        if npc.data.faction != infinite_game::NpcFaction::Hostile {
+                            self.interaction_system.add(Interactable::npc(
+                                npc.position,
+                                npc.id,
+                                npc.name(),
+                                npc.data.interaction_radius,
+                            ));
+                        }
+                    }
+
+                    // --- Enemy combat: enemies damage player ---
+                    // Collect attacking enemy IDs first (avoids borrow conflicts)
+                    let attacking_enemies: Vec<NpcId> = npc_manager.npcs_iter()
+                        .filter(|n| n.data.role == infinite_game::NpcRole::Enemy)
+                        .filter(|n| {
+                            n.brain.as_ref()
+                                .and_then(|b| b.current_action_name())
+                                .map(|name| name == "attack_melee")
+                                .unwrap_or(false)
+                        })
+                        .map(|n| n.id)
+                        .collect();
+                    for npc_id in &attacking_enemies {
+                        if let Some(stats) = npc_manager.combat_stats.get_mut(npc_id) {
+                            if stats.is_alive() && stats.update_attack(delta) {
+                                let dmg = stats.attack;
+                                self.player_combat.take_damage(dmg);
+                            }
+                        }
+                    }
+                }
+
+                // --- Player combat update ---
+                self.player_combat.update(delta);
+
+                // --- Interaction system ---
+                if let Some(camera) = &self.camera {
+                    let forward = camera.forward();
+                    self.interaction_system.update(player_pos, forward);
+                }
+
+                // Handle Interact input (E key)
+                if !self.dialogue_system.is_active() && self.input_handler.state.is_just_pressed(InputAction::Interact) {
+                    if let Some(result) = self.interaction_system.interact() {
+                        match result {
+                            InteractionResult::ShowText(text) => {
+                                self.interaction_text = Some(text);
+                                self.interaction_text_timer = 5.0;
+                            }
+                            InteractionResult::ChangeEra(target_era) => {
+                                if !self.era_transitioning {
+                                    self.era_transition_source = self.timeline.active_era;
+                                    self.pending_era_transition = Some(target_era);
+                                    self.era_transitioning = true;
+                                    self.era_transition_alpha = 0.0;
+                                    info!("Starting era transition to era {}", target_era);
+                                }
+                            }
+                            InteractionResult::PickupItem(name) => {
+                                self.notification_text = Some(format!("Picked up: {}", name));
+                                self.notification_timer = 3.0;
+                            }
+                            InteractionResult::TalkToNpc(npc_id) => {
+                                if let Some(npc_manager) = &mut self.npc_manager {
+                                    if let Some(npc) = npc_manager.get_mut(npc_id) {
+                                        let npc_name = npc.name().to_string();
+                                        let role = npc.data.role;
+                                        npc.state = infinite_game::npc::NpcBehaviorState::Talking;
+                                        self.dialogue_system.start_dialogue(npc_id, npc_name, role);
+                                    }
+                                }
+                            }
+                            InteractionResult::ToggleDoor { now_open, .. } => {
+                                let msg = if now_open { "Door opened" } else { "Door closed" };
+                                self.notification_text = Some(msg.to_string());
+                                self.notification_timer = 1.5;
+                            }
+                            InteractionResult::ToggleLever { now_on, linked, .. } => {
+                                let msg = if now_on { "Lever activated" } else { "Lever deactivated" };
+                                self.notification_text = Some(msg.to_string());
+                                self.notification_timer = 1.5;
+                                self.interaction_system.trigger_linked(&linked);
+                            }
+                            InteractionResult::PressButton { .. } => {
+                                self.notification_text = Some("Button pressed".to_string());
+                                self.notification_timer = 1.5;
+                            }
+                            InteractionResult::OpenContainer { items, .. } => {
+                                if items.is_empty() {
+                                    self.notification_text = Some("Container is empty".to_string());
+                                } else {
+                                    let item_list = items.join(", ");
+                                    self.notification_text = Some(format!("Found: {}", item_list));
+                                    self.collected_items.extend(items);
+                                }
+                                self.notification_timer = 3.0;
+                            }
+                            InteractionResult::StartClimbing { height, direction } => {
+                                self.climbing = true;
+                                self.climb_direction = direction;
+                                self.climb_remaining = height;
+                                self.notification_text = Some("Climbing...".to_string());
+                                self.notification_timer = 1.5;
+                            }
+                            InteractionResult::Locked => {
+                                self.notification_text = Some("It's locked".to_string());
+                                self.notification_timer = 2.0;
+                            }
+                        }
+                    }
+                }
+
+                // --- Save/Load ---
+                if self.input_handler.state.is_just_pressed(InputAction::QuickSave) {
+                    self.do_quicksave();
+                }
+                if self.input_handler.state.is_just_pressed(InputAction::QuickLoad) {
+                    self.do_quickload();
+                }
+
+                // --- Play time & auto-save ---
+                self.play_time += delta as f64;
+                if self.settings.gameplay.auto_save {
+                    self.auto_save_timer -= delta;
+                    if self.auto_save_timer <= 0.0 {
+                        self.do_autosave();
+                        self.auto_save_timer = self.settings.gameplay.auto_save_interval as f32;
+                    }
+                }
+
+                // --- Timers ---
+                if self.interaction_text_timer > 0.0 {
+                    self.interaction_text_timer -= delta;
+                    if self.interaction_text_timer <= 0.0 {
+                        self.interaction_text = None;
+                    }
+                }
+                if self.notification_timer > 0.0 {
+                    self.notification_timer -= delta;
+                    if self.notification_timer <= 0.0 {
+                        self.notification_text = None;
+                    }
                 }
 
                 // Clear frame input
@@ -616,9 +1234,10 @@ impl InfiniteApp {
             }
             ApplicationState::MainMenu => {
                 // Cleanup game systems when returning to main menu
-                if matches!(old_state, ApplicationState::Playing | ApplicationState::Paused) {
+                if matches!(old_state, ApplicationState::Playing | ApplicationState::Paused | ApplicationState::SaveLoad { .. }) {
                     self.cleanup_game_systems();
                     self.current_character = None;
+                    self.save_load_menu = None;
                 }
             }
             _ => {}
@@ -673,6 +1292,7 @@ impl InfiniteApp {
         // Build egui UI - collect transition to apply later
         let mut pending_transition = StateTransition::None;
         let mut should_save_settings = false;
+        let mut save_load_pending_action: Option<(StateTransition, SaveLoadAction)> = None;
 
         // Collect data needed for UI rendering
         let era_name = self.timeline.current_era().name().to_string();
@@ -725,6 +1345,21 @@ impl InfiniteApp {
                                 }
                             }
                             ApplicationState::Paused => self.pause_menu.render(ui),
+                            ApplicationState::SaveLoad { is_saving } => {
+                                let is_saving = *is_saving;
+                                if self.save_load_menu.is_none() {
+                                    self.save_load_menu = Some(SaveLoadMenu::new(is_saving));
+                                }
+                                // Render menu and capture action
+                                let (menu_transition, action) = if let Some(menu) = &mut self.save_load_menu {
+                                    menu.render(ui)
+                                } else {
+                                    (StateTransition::None, SaveLoadAction::None)
+                                };
+                                // Store action to process after match (avoids borrow conflict with gather_save_data)
+                                save_load_pending_action = Some((menu_transition, action));
+                                StateTransition::None
+                            }
                             ApplicationState::Playing => {
                                 // Player stats (placeholder values for now)
                                 let hp = 85.0f32;
@@ -859,17 +1494,213 @@ impl InfiniteApp {
                                     .anchor(egui::Align2::CENTER_BOTTOM, [0.0, -20.0])
                                     .show(&ctx, |ui| {
                                         ui.label(
-                                            egui::RichText::new("WASD: Move | Space: Jump | Shift: Sprint | Scroll: Zoom | ESC: Pause | F3: Debug | T: Pause Time | Y: Weather | U: +1 Hour")
+                                            egui::RichText::new("WASD: Move | Space: Jump | Shift: Sprint | Scroll: Zoom | E: Interact | F5: Save | F9: Load | ESC: Pause | F3: Debug")
                                                 .color(egui::Color32::from_rgba_unmultiplied(150, 150, 170, 200))
                                                 .font(egui::FontId::proportional(12.0)),
                                         );
                                     });
 
+                                // Interaction prompt (when focused on an interactable)
+                                if let Some(focused) = self.interaction_system.focused() {
+                                    egui::Area::new(egui::Id::new("interaction_prompt"))
+                                        .anchor(egui::Align2::CENTER_CENTER, [0.0, 50.0])
+                                        .show(&ctx, |ui| {
+                                            egui::Frame::new()
+                                                .fill(egui::Color32::from_rgba_unmultiplied(0, 0, 0, 220))
+                                                .corner_radius(6.0)
+                                                .inner_margin(10.0)
+                                                .show(ui, |ui| {
+                                                    ui.label(
+                                                        egui::RichText::new(format!("Press E to {}", &focused.prompt))
+                                                            .font(egui::FontId::proportional(16.0))
+                                                            .color(egui::Color32::from_rgb(255, 220, 100)),
+                                                    );
+                                                });
+                                        });
+                                }
+
+                                // Interaction text overlay (sign content)
+                                if let Some(text) = &self.interaction_text {
+                                    egui::Area::new(egui::Id::new("interaction_text"))
+                                        .anchor(egui::Align2::CENTER_CENTER, [0.0, -50.0])
+                                        .show(&ctx, |ui| {
+                                            egui::Frame::new()
+                                                .fill(egui::Color32::from_rgba_unmultiplied(20, 20, 40, 230))
+                                                .corner_radius(8.0)
+                                                .inner_margin(16.0)
+                                                .show(ui, |ui| {
+                                                    ui.set_max_width(400.0);
+                                                    ui.label(
+                                                        egui::RichText::new(text)
+                                                            .font(egui::FontId::proportional(16.0))
+                                                            .color(egui::Color32::from_rgb(230, 230, 240)),
+                                                    );
+                                                });
+                                        });
+                                }
+
+                                // Notification (save/load/pickup)
+                                if let Some(notif) = &self.notification_text {
+                                    egui::Area::new(egui::Id::new("notification"))
+                                        .anchor(egui::Align2::CENTER_TOP, [0.0, 60.0])
+                                        .show(&ctx, |ui| {
+                                            egui::Frame::new()
+                                                .fill(egui::Color32::from_rgba_unmultiplied(0, 80, 0, 200))
+                                                .corner_radius(6.0)
+                                                .inner_margin(10.0)
+                                                .show(ui, |ui| {
+                                                    ui.label(
+                                                        egui::RichText::new(notif)
+                                                            .font(egui::FontId::proportional(16.0))
+                                                            .color(egui::Color32::WHITE),
+                                                    );
+                                                });
+                                        });
+                                }
+
+                                // --- Dialogue UI ---
+                                if self.dialogue_system.is_active() {
+                                    let should_close = {
+                                        let mut close = false;
+                                        egui::Area::new(egui::Id::new("dialogue_ui"))
+                                            .anchor(egui::Align2::CENTER_BOTTOM, [0.0, -40.0])
+                                            .show(&ctx, |ui| {
+                                                egui::Frame::new()
+                                                    .fill(egui::Color32::from_rgba_unmultiplied(15, 15, 30, 240))
+                                                    .corner_radius(10.0)
+                                                    .inner_margin(16.0)
+                                                    .show(ui, |ui| {
+                                                        ui.set_min_width(400.0);
+                                                        ui.set_max_width(500.0);
+
+                                                        if let Some(active) = self.dialogue_system.active() {
+                                                            ui.label(
+                                                                egui::RichText::new(&active.npc_name)
+                                                                    .font(egui::FontId::proportional(14.0))
+                                                                    .color(egui::Color32::from_rgb(180, 180, 200))
+                                                            );
+                                                            ui.separator();
+                                                        }
+
+                                                        if let Some(node) = self.dialogue_system.current_node() {
+                                                            ui.label(
+                                                                egui::RichText::new(&node.text)
+                                                                    .font(egui::FontId::proportional(16.0))
+                                                                    .color(egui::Color32::from_rgb(230, 230, 240))
+                                                            );
+                                                            ui.add_space(10.0);
+
+                                                            let responses: Vec<(usize, String)> = node.responses.iter()
+                                                                .enumerate()
+                                                                .map(|(i, r)| (i, r.text.clone()))
+                                                                .collect();
+                                                            for (i, text) in responses {
+                                                                if ui.button(
+                                                                    egui::RichText::new(format!("  {}  ", text))
+                                                                        .font(egui::FontId::proportional(14.0))
+                                                                ).clicked() {
+                                                                    close = false;
+                                                                    self.dialogue_system.choose_response(i);
+                                                                }
+                                                            }
+                                                        } else {
+                                                            close = true;
+                                                        }
+                                                    });
+                                            });
+                                        close
+                                    };
+                                    if should_close {
+                                        self.dialogue_system.end_dialogue();
+                                    }
+                                }
+
+                                // --- Player Health Bar ---
+                                if self.player_combat.current_hp < self.player_combat.max_hp {
+                                    egui::Area::new(egui::Id::new("player_health"))
+                                        .anchor(egui::Align2::LEFT_BOTTOM, [10.0, -10.0])
+                                        .show(&ctx, |ui| {
+                                            egui::Frame::new()
+                                                .fill(egui::Color32::from_rgba_unmultiplied(0, 0, 0, 180))
+                                                .corner_radius(4.0)
+                                                .inner_margin(6.0)
+                                                .show(ui, |ui| {
+                                                    ui.label(egui::RichText::new("HP")
+                                                        .font(egui::FontId::proportional(12.0))
+                                                        .color(egui::Color32::WHITE));
+                                                    let hp_frac = self.player_combat.hp_fraction();
+                                                    let bar = egui::ProgressBar::new(hp_frac)
+                                                        .text(format!("{:.0}/{:.0}", self.player_combat.current_hp, self.player_combat.max_hp));
+                                                    ui.add_sized([150.0, 16.0], bar);
+                                                });
+                                        });
+                                }
+
+                                // --- Damage Flash ---
+                                if self.player_combat.damage_flash_timer > 0.0 {
+                                    let alpha = (self.player_combat.damage_flash_timer / 0.3 * 80.0) as u8;
+                                    egui::Area::new(egui::Id::new("damage_flash"))
+                                        .fixed_pos([0.0, 0.0])
+                                        .order(egui::Order::Foreground)
+                                        .show(&ctx, |ui| {
+                                            let screen_rect = ctx.screen_rect();
+                                            ui.painter().rect_filled(
+                                                screen_rect,
+                                                0.0,
+                                                egui::Color32::from_rgba_unmultiplied(200, 0, 0, alpha),
+                                            );
+                                            ui.allocate_space(screen_rect.size());
+                                        });
+                                }
+
+                                // Era transition fade overlay (tinted per era)
+                                if self.era_transition_alpha > 0.01 {
+                                    let alpha = (self.era_transition_alpha * 255.0) as u8;
+                                    // Blend between source era tint and target era tint
+                                    // First half fades to black through source tint,
+                                    // second half fades from black through target tint
+                                    let (tint_r, tint_g, tint_b) = if self.era_transition_alpha > 0.5 {
+                                        // Fading to black: use source era tint, fade toward black
+                                        let (sr, sg, sb) = era_tint_color(self.era_transition_source);
+                                        let t = (self.era_transition_alpha - 0.5) * 2.0; // 0..1 as we approach full black
+                                        let r = (sr as f32 * (1.0 - t)) as u8;
+                                        let g = (sg as f32 * (1.0 - t)) as u8;
+                                        let b = (sb as f32 * (1.0 - t)) as u8;
+                                        (r, g, b)
+                                    } else {
+                                        // Fading from black: use target era tint, fade from black
+                                        let target_era = self.timeline.active_era;
+                                        let (tr, tg, tb) = era_tint_color(target_era);
+                                        let t = self.era_transition_alpha * 2.0; // 0..1 as we fade away
+                                        let r = (tr as f32 * (1.0 - t)) as u8;
+                                        let g = (tg as f32 * (1.0 - t)) as u8;
+                                        let b = (tb as f32 * (1.0 - t)) as u8;
+                                        (r, g, b)
+                                    };
+                                    egui::Area::new(egui::Id::new("era_transition"))
+                                        .fixed_pos([0.0, 0.0])
+                                        .order(egui::Order::Foreground)
+                                        .show(&ctx, |ui| {
+                                            let screen_rect = ctx.screen_rect();
+                                            ui.painter().rect_filled(
+                                                screen_rect,
+                                                0.0,
+                                                egui::Color32::from_rgba_unmultiplied(tint_r, tint_g, tint_b, alpha),
+                                            );
+                                            ui.allocate_space(screen_rect.size());
+                                        });
+                                }
+
                                 // Debug overlay (F3)
                                 if self.debug_visible {
                                     let player_pos = self.player.as_ref().map(|p| p.position()).unwrap_or(Vec3::ZERO);
                                     let player_grounded = self.player.as_ref().map(|p| p.is_grounded()).unwrap_or(false);
-                                    let terrain_height = self.terrain.as_ref().map(|t| t.height_at(player_pos.x, player_pos.z)).unwrap_or(0.0);
+                                    let chunk_height = self.chunk_manager.as_ref()
+                                        .map(|cm| cm.height_at(player_pos.x, player_pos.z))
+                                        .unwrap_or(0.0);
+                                    let chunks_loaded = self.chunk_manager.as_ref()
+                                        .map(|cm| cm.loaded_count())
+                                        .unwrap_or(0);
 
                                     egui::Window::new("Debug")
                                         .anchor(egui::Align2::LEFT_BOTTOM, [10.0, -40.0])
@@ -880,8 +1711,16 @@ impl InfiniteApp {
                                             ui.heading("Player");
                                             ui.label(format!("Position: ({:.1}, {:.1}, {:.1})", player_pos.x, player_pos.y, player_pos.z));
                                             ui.label(format!("Grounded: {}", player_grounded));
-                                            ui.label(format!("Terrain height: {:.2}", terrain_height));
-                                            ui.label(format!("Above terrain: {:.2}", player_pos.y - terrain_height));
+                                            ui.label(format!("Terrain height: {:.2}", chunk_height));
+                                            ui.label(format!("Above terrain: {:.2}", player_pos.y - chunk_height));
+
+                                            ui.separator();
+                                            ui.heading("Chunks");
+                                            ui.label(format!("Loaded: {}", chunks_loaded));
+                                            if let Some(cm) = &self.chunk_manager {
+                                                let pc = cm.player_chunk(player_pos);
+                                                ui.label(format!("Player chunk: ({}, {})", pc.x, pc.z));
+                                            }
 
                                             ui.separator();
                                             ui.heading("Rendering");
@@ -890,8 +1729,40 @@ impl InfiniteApp {
 
                                             ui.separator();
                                             ui.heading("World");
+                                            ui.label(format!("Era: {} ({})", self.timeline.current_era().name(), self.timeline.active_era));
                                             ui.label(format!("Time: {} ({})", self.time_of_day.formatted_time(), self.time_of_day.period_name()));
                                             ui.label(format!("Weather: {}", self.weather.current.name()));
+
+                                            // NPC info
+                                            ui.separator();
+                                            ui.heading("NPCs");
+                                            if let Some(npc_mgr) = &self.npc_manager {
+                                                ui.label(format!("Total: {}", npc_mgr.count()));
+                                                ui.label(format!("Friendly: {}", npc_mgr.count_by_faction(infinite_game::NpcFaction::Friendly)));
+                                                ui.label(format!("Hostile: {}", npc_mgr.count_by_faction(infinite_game::NpcFaction::Hostile)));
+                                                ui.label(format!("Neutral: {}", npc_mgr.count_by_faction(infinite_game::NpcFaction::Neutral)));
+                                            }
+                                            ui.label(format!("Player HP: {:.0}/{:.0}", self.player_combat.current_hp, self.player_combat.max_hp));
+
+                                            // Era selector buttons
+                                            ui.separator();
+                                            ui.heading("Era Selector");
+                                            let era_count = self.timeline.eras.len();
+                                            for i in 0..era_count {
+                                                let era_name = self.timeline.eras[i].name().to_string();
+                                                let is_active = self.timeline.active_era == i;
+                                                let label = if is_active {
+                                                    format!("> {} <", era_name)
+                                                } else {
+                                                    era_name
+                                                };
+                                                if ui.button(&label).clicked() && !is_active && !self.era_transitioning {
+                                                    self.era_transition_source = self.timeline.active_era;
+                                                    self.pending_era_transition = Some(i);
+                                                    self.era_transitioning = true;
+                                                    self.era_transition_alpha = 0.0;
+                                                }
+                                            }
                                         });
                                 }
 
@@ -903,6 +1774,60 @@ impl InfiniteApp {
                         pending_transition = transition;
                     });
             });
+        }
+
+        // Process save/load actions (deferred to avoid borrow conflicts in the UI closure)
+        if let Some((menu_transition, action)) = save_load_pending_action {
+            let mut result_transition = menu_transition;
+            match action {
+                SaveLoadAction::SaveNew(name) => {
+                    let data = self.gather_save_data(&name);
+                    match save::save_to_slot(&name, &data) {
+                        Ok(()) => {
+                            self.notification_text = Some(format!("Saved: {}", name));
+                            self.notification_timer = 2.0;
+                        }
+                        Err(e) => {
+                            self.notification_text = Some(format!("Save failed: {}", e));
+                            self.notification_timer = 3.0;
+                        }
+                    }
+                    if let Some(menu) = &mut self.save_load_menu {
+                        menu.mark_needs_refresh();
+                    }
+                }
+                SaveLoadAction::Load(filename) => {
+                    match save::load_from_slot(&filename) {
+                        Ok(data) => {
+                            self.restore_from_save(data);
+                            self.notification_text = Some("Game Loaded".to_string());
+                            self.notification_timer = 2.0;
+                            self.save_load_menu = None;
+                            result_transition = StateTransition::Replace(ApplicationState::Playing);
+                        }
+                        Err(e) => {
+                            self.notification_text = Some(format!("Load failed: {}", e));
+                            self.notification_timer = 3.0;
+                        }
+                    }
+                }
+                SaveLoadAction::Delete(filename) => {
+                    if let Err(e) = save::delete_slot(&filename) {
+                        self.notification_text = Some(format!("Delete failed: {}", e));
+                        self.notification_timer = 3.0;
+                    }
+                    if let Some(menu) = &mut self.save_load_menu {
+                        menu.mark_needs_refresh();
+                    }
+                }
+                SaveLoadAction::None => {}
+            }
+            if matches!(result_transition, StateTransition::Pop) {
+                self.save_load_menu = None;
+            }
+            if !matches!(result_transition, StateTransition::None) {
+                pending_transition = result_transition;
+            }
         }
 
         // Apply state transition after UI is done
@@ -1036,15 +1961,53 @@ impl InfiniteApp {
                 }
             }
 
-            // Render terrain (use wireframe pipeline if debug enabled)
-            if let Some(terrain_mesh) = &render_ctx.terrain_mesh {
+            // Render chunk terrain meshes
+            {
                 let terrain_pipeline = if self.debug_wireframe {
                     render_ctx.wireframe_pipeline.as_ref().or(render_ctx.basic_pipeline.as_ref())
                 } else {
                     render_ctx.basic_pipeline.as_ref()
                 };
 
-                if let Some(pipeline) = terrain_pipeline {
+                if let (Some(pipeline), Some(chunk_manager)) = (terrain_pipeline, &self.chunk_manager) {
+                    let chunk_size = chunk_manager.config.chunk_size;
+
+                    for chunk in chunk_manager.loaded_chunks() {
+                        if let Some(mesh) = render_ctx.chunk_meshes.get(&chunk.coord) {
+                            let origin = chunk.coord.world_center(chunk_size);
+                            let model = Mat4::from_translation(origin);
+
+                            let push = BasicPushConstants::new(
+                                model,
+                                view_matrix,
+                                projection_matrix,
+                                sun_direction,
+                                sun_intensity,
+                                Vec3::new(1.0, 0.95, 0.85),
+                                ambient_intensity,
+                            );
+
+                            unsafe {
+                                builder
+                                    .bind_pipeline_graphics(pipeline.clone())
+                                    .unwrap()
+                                    .push_constants(pipeline.layout().clone(), 0, push)
+                                    .unwrap()
+                                    .bind_vertex_buffers(0, mesh.vertex_buffer.clone())
+                                    .unwrap()
+                                    .bind_index_buffer(mesh.index_buffer.clone())
+                                    .unwrap()
+                                    .draw_indexed(mesh.index_count, 1, 0, 0, 0)
+                                    .unwrap();
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Also render legacy single terrain if present (fallback)
+            if let Some(terrain_mesh) = &render_ctx.terrain_mesh {
+                if let Some(pipeline) = render_ctx.basic_pipeline.as_ref() {
                     let push = BasicPushConstants::new(
                         Mat4::IDENTITY,
                         view_matrix,
@@ -1054,7 +2017,6 @@ impl InfiniteApp {
                         Vec3::new(1.0, 0.95, 0.85),
                         ambient_intensity,
                     );
-
                     unsafe {
                         builder
                             .bind_pipeline_graphics(pipeline.clone())
@@ -1067,25 +2029,6 @@ impl InfiniteApp {
                             .unwrap()
                             .draw_indexed(terrain_mesh.index_count, 1, 0, 0, 0)
                             .unwrap();
-                    }
-
-                    // If wireframe mode, also draw solid underneath for visibility
-                    if self.debug_wireframe {
-                        if let Some(basic_pipeline) = &render_ctx.basic_pipeline {
-                            unsafe {
-                                builder
-                                    .bind_pipeline_graphics(basic_pipeline.clone())
-                                    .unwrap()
-                                    .push_constants(basic_pipeline.layout().clone(), 0, push)
-                                    .unwrap()
-                                    .bind_vertex_buffers(0, terrain_mesh.vertex_buffer.clone())
-                                    .unwrap()
-                                    .bind_index_buffer(terrain_mesh.index_buffer.clone())
-                                    .unwrap()
-                                    .draw_indexed(terrain_mesh.index_count, 1, 0, 0, 0)
-                                    .unwrap();
-                            }
-                        }
                     }
                 }
             }
@@ -1119,6 +2062,42 @@ impl InfiniteApp {
                         .unwrap()
                         .draw_indexed(capsule_mesh.index_count, 1, 0, 0, 0)
                         .unwrap();
+                }
+            }
+
+            // Render NPC capsules
+            if let (Some(basic_pipeline), Some(npc_mesh)) =
+                (&render_ctx.basic_pipeline, &render_ctx.npc_capsule_mesh)
+            {
+                if let Some(npc_manager) = &self.npc_manager {
+                    for npc in npc_manager.npcs_iter() {
+                        let model = Mat4::from_translation(npc.position);
+                        let color = npc.data.color;
+
+                        let push = BasicPushConstants::new(
+                            model,
+                            view_matrix,
+                            projection_matrix,
+                            sun_direction,
+                            sun_intensity,
+                            Vec3::new(color[0], color[1], color[2]),
+                            ambient_intensity,
+                        );
+
+                        unsafe {
+                            builder
+                                .bind_pipeline_graphics(basic_pipeline.clone())
+                                .unwrap()
+                                .push_constants(basic_pipeline.layout().clone(), 0, push)
+                                .unwrap()
+                                .bind_vertex_buffers(0, npc_mesh.vertex_buffer.clone())
+                                .unwrap()
+                                .bind_index_buffer(npc_mesh.index_buffer.clone())
+                                .unwrap()
+                                .draw_indexed(npc_mesh.index_count, 1, 0, 0, 0)
+                                .unwrap();
+                        }
+                    }
                 }
             }
 
@@ -1550,6 +2529,8 @@ impl ApplicationHandler for InfiniteApp {
             wireframe_pipeline,
             capsule_mesh,
             terrain_mesh: None,
+            chunk_meshes: HashMap::new(),
+            npc_capsule_mesh: None,
             sky_mesh,
             debug_capsule_mesh: None,
         });
@@ -1602,6 +2583,10 @@ impl ApplicationHandler for InfiniteApp {
                             self.apply_transition(StateTransition::Pop);
                         }
                         ApplicationState::Settings { .. } => {
+                            self.apply_transition(StateTransition::Pop);
+                        }
+                        ApplicationState::SaveLoad { .. } => {
+                            self.save_load_menu = None;
                             self.apply_transition(StateTransition::Pop);
                         }
                         ApplicationState::CharacterCreation => {
@@ -2029,6 +3014,19 @@ fn create_sky_pipeline(
         },
     )
     .ok()
+}
+
+/// Get tint color for era transitions
+fn era_tint_color(era_index: usize) -> (u8, u8, u8) {
+    match era_index {
+        0 => (180, 120, 40),   // Ancient: warm amber
+        1 => (120, 80, 40),    // Medieval: earthy brown
+        2 => (140, 100, 60),   // Industrial: grey-orange
+        3 => (0, 0, 0),        // Present: neutral black
+        4 => (40, 80, 160),    // Near Future: cool blue
+        5 => (60, 160, 200),   // Far Future: cyan-white
+        _ => (0, 0, 0),        // Unknown: black
+    }
 }
 
 /// Create GPU buffers for a mesh

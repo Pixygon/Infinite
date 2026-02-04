@@ -179,6 +179,55 @@ impl Terrain {
         }
     }
 
+    /// Generate terrain for a specific chunk at a world offset.
+    ///
+    /// The terrain is generated as if centered at (world_offset_x + size/2, world_offset_z + size/2),
+    /// using the same noise function but sampling at the chunk's world coordinates.
+    pub fn generate_chunk(config: TerrainConfig, world_offset_x: f32, world_offset_z: f32) -> Self {
+        let perlin = Perlin::new(config.seed);
+        let vertex_count = config.subdivisions + 1;
+        let total_vertices = (vertex_count * vertex_count) as usize;
+
+        let mut heights = Vec::with_capacity(total_vertices);
+        let mut min_height = f32::MAX;
+        let mut max_height = f32::MIN;
+
+        let half_size = config.size / 2.0;
+        let step = config.size / config.subdivisions as f32;
+
+        for z in 0..vertex_count {
+            for x in 0..vertex_count {
+                // Local position within chunk (centered)
+                let local_x = -half_size + x as f32 * step;
+                let local_z = -half_size + z as f32 * step;
+
+                // World position = chunk origin + half_size (center) + local offset
+                let world_x = world_offset_x + half_size + local_x;
+                let world_z = world_offset_z + half_size + local_z;
+
+                let height = fractal_noise(
+                    &perlin,
+                    (world_x * config.noise_scale) as f64,
+                    (world_z * config.noise_scale) as f64,
+                    config.octaves,
+                    config.persistence,
+                    config.lacunarity,
+                ) * config.max_height;
+
+                min_height = min_height.min(height);
+                max_height = max_height.max(height);
+                heights.push(height);
+            }
+        }
+
+        Self {
+            config,
+            heights,
+            min_height,
+            max_height,
+        }
+    }
+
     /// Get heights for physics heightfield collider
     /// Returns heights in the format expected by rapier3d
     pub fn physics_heights(&self) -> Vec<f32> {

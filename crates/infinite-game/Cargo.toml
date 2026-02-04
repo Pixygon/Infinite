@@ -10,6 +10,7 @@ description = "Game logic for Infinite"
 infinite-core.workspace = true
 infinite-ecs.workspace = true
 infinite-physics.workspace = true
+infinite-world.workspace = true
 rapier3d.workspace = true
 serde.workspace = true
 glam.workspace = true

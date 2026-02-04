@@ -47,6 +47,20 @@ impl PauseMenu {
 
                 ui.add_space(10.0);
 
+                // Save Game
+                if pause_button(ui, "Save Game", button_size) {
+                    transition = StateTransition::Push(ApplicationState::SaveLoad { is_saving: true });
+                }
+
+                ui.add_space(10.0);
+
+                // Load Game
+                if pause_button(ui, "Load Game", button_size) {
+                    transition = StateTransition::Push(ApplicationState::SaveLoad { is_saving: false });
+                }
+
+                ui.add_space(10.0);
+
                 // Settings
                 if pause_button(ui, "Settings", button_size) {
                     transition = StateTransition::Push(ApplicationState::Settings {

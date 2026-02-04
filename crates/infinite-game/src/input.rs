@@ -32,6 +32,10 @@ pub enum InputAction {
     Pause,
     /// Interact with objects (E by default)
     Interact,
+    /// Quick save (F5 by default)
+    QuickSave,
+    /// Quick load (F9 by default)
+    QuickLoad,
 }
 
 /// Current state of all inputs for a frame
@@ -139,6 +143,8 @@ impl Default for InputBindings {
         bindings.bind(KeyCode::ShiftRight, InputAction::Sprint);
         bindings.bind(KeyCode::Escape, InputAction::Pause);
         bindings.bind(KeyCode::KeyE, InputAction::Interact);
+        bindings.bind(KeyCode::F5, InputAction::QuickSave);
+        bindings.bind(KeyCode::F9, InputAction::QuickLoad);
 
         bindings
     }
