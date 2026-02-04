@@ -2,6 +2,7 @@
 //!
 //! A custom ECS implementation optimized for the Infinite engine.
 //! Uses generational indices for entities and sparse-set storage for components.
+#![allow(dead_code)]
 
 mod component;
 mod entity;

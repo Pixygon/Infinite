@@ -1,7 +1,7 @@
 # Infinite - Vulkan Game Engine
 
 ## Overview
-A Rust/Vulkan game engine with ray tracing for a time-travel themed game where players traverse different eras (past, present, future).
+A Rust/Vulkan game engine with ray tracing for a time-travel themed game where players traverse a continuous year-based timeline. The world changes organically over time — ancient ruins in one period were once a thriving castle in another.
 
 ## Project Structure
 ```
@@ -9,6 +9,7 @@ src/                          # Main application
 ├── main.rs                   # Entry point, Vulkan + egui
 ├── state.rs                  # ApplicationState machine
 ├── settings.rs               # GameSettings persistence
+├── save.rs                   # Save/load system
 ├── character/                # Character data and creator
 │   ├── mod.rs                # Character data structures
 │   └── persistence.rs        # Save/load characters
@@ -17,6 +18,7 @@ src/                          # Main application
     ├── loading_screen.rs     # Animated loading
     ├── main_menu.rs          # Title screen
     ├── pause_menu.rs         # In-game pause
+    ├── save_load_menu.rs     # Save/load slot UI
     ├── settings_menu.rs      # Settings tabs
     └── character_creator.rs  # Character customization
 
@@ -28,20 +30,28 @@ crates/
 │   ├── lib.rs                # PhysicsWorld
 │   └── character_controller.rs # Player physics
 ├── infinite-audio/           # kira audio
-├── infinite-world/           # World/era management
+├── infinite-world/           # World/chunk management
 ├── infinite-net/             # WebSocket networking
 ├── infinite-assets/          # glTF/texture loading
 ├── infinite-game/            # Game logic
 │   ├── lib.rs                # Module exports
 │   ├── input.rs              # Input action system
+│   ├── interaction.rs        # World interactions (doors, levers, etc.)
 │   ├── player/               # Player controller
 │   │   ├── mod.rs
 │   │   ├── movement.rs       # Movement config
 │   │   └── controller.rs     # Player controller
-│   └── camera/               # Camera system
+│   ├── camera/               # Camera system
+│   │   ├── mod.rs
+│   │   ├── config.rs         # Camera config
+│   │   └── controller.rs     # Camera controller
+│   └── npc/                  # NPC system
 │       ├── mod.rs
-│       ├── config.rs         # Camera config
-│       └── controller.rs     # Camera controller
+│       ├── manager.rs        # NPC lifecycle
+│       ├── spawn.rs          # Procedural NPC placement
+│       ├── goap.rs           # Goal-oriented AI
+│       ├── combat.rs         # Combat stats
+│       └── dialogue.rs       # NPC dialogue
 └── infinite-integration/     # PixygonServer client
 ```
 
@@ -64,15 +74,15 @@ cargo clippy             # Lint
 
 | Crate | Purpose |
 |-------|---------|
-| `infinite-core` | Core types (Transform, Color, EntityId), time system (Era, Timeline, GameTime) |
+| `infinite-core` | Core types (Transform, Color, EntityId), time system (Timeline, GameTime) |
 | `infinite-ecs` | Entity Component System |
 | `infinite-render` | Vulkan renderer with ray tracing |
 | `infinite-physics` | Physics via rapier3d, character controller |
 | `infinite-audio` | Audio via kira |
-| `infinite-world` | World chunks, era management, time portals |
+| `infinite-world` | World chunks, year-based terrain, time portals |
 | `infinite-net` | Networking, prediction, server sync |
 | `infinite-assets` | glTF loading, textures, caching |
-| `infinite-game` | Player controller, camera, input system |
+| `infinite-game` | Player controller, camera, input system, interactions, NPCs |
 | `infinite-integration` | PixygonServer API client |
 
 ## Application States
@@ -84,6 +94,7 @@ pub enum ApplicationState {
     CharacterCreation,                   // Character creator
     Settings { return_to: Box<...> },    // Nested settings
     Paused,                              // Game paused
+    SaveLoad { is_saving: bool },        // Save/load menu
     Playing,                             // Active gameplay
     Exiting,                             // Shutdown
 }
@@ -97,9 +108,12 @@ pub enum ApplicationState {
 | Space | Jump |
 | Shift | Sprint |
 | Mouse | Look |
-| Scroll | Zoom (FPS ↔ Third-person) |
+| Scroll | Zoom (FPS / Third-person) |
 | ESC | Pause |
 | E | Interact |
+| F5 | Quick Save |
+| F9 | Quick Load |
+| F3 | Debug overlay |
 
 ## Pixygon Agent Integration
 
@@ -122,12 +136,13 @@ git push origin HEAD
 
 ## Time Travel System
 
-The world exists across multiple Eras:
-- **Past**: Historical periods (configurable years_ago)
-- **Present**: The "now" moment, synced for MMO
-- **Future**: Speculative futures (configurable years_ahead)
+The world exists on a **continuous year-based timeline** (not fixed eras). Any year from deep past to far future can be visited.
 
-Single-player allows free travel between eras. MMO mode locks to Present.
+- **Present year**: The "now" year — MMO players are synced here.
+- **Single-player**: Stories can start at any year. The world changes organically over time — a location that's ancient ruins in one period might be a thriving castle in another.
+- **Time portals**: Transport the player to a specific year, triggering terrain regeneration and a tinted fade transition.
+- **Terrain**: Varies based on distance from present — distant past has dramatic mountains, present is default, far future is flatter with more detail.
+- **NPCs**: Some NPCs have year-range filters (e.g., enemies don't spawn in the deep past).
 
 ## Rendering Pipeline
 

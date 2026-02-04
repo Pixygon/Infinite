@@ -16,6 +16,7 @@ impl MainMenu {
     }
 
     /// Set whether a save file exists
+    #[allow(dead_code)]
     pub fn set_has_save(&mut self, has_save: bool) {
         self.has_save = has_save;
     }
@@ -61,7 +62,7 @@ impl MainMenu {
                 // Settings
                 if menu_button(ui, "Settings", button_size) {
                     transition = StateTransition::Push(ApplicationState::Settings {
-                        return_to: Box::new(ApplicationState::MainMenu),
+                        _return_to: Box::new(ApplicationState::MainMenu),
                     });
                 }
 

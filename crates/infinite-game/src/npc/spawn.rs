@@ -11,8 +11,8 @@ pub struct NpcSpawnPoint {
     pub offset: Vec3,
     /// NPC definition to spawn
     pub data: NpcData,
-    /// Only spawn in these era indices (None = all eras)
-    pub era_filter: Option<Vec<usize>>,
+    /// Only spawn in this year range (None = all years)
+    pub year_range: Option<(i64, i64)>,
 }
 
 /// Simple deterministic hash of a chunk coordinate to seed NPC placement
@@ -57,9 +57,9 @@ pub fn generate_spawn_points(cx: i32, cz: i32, chunk_size: f32) -> Vec<NpcSpawnP
         let npc_name_index = (sub_hash >> 48) % 16;
         let name = npc_name(role, npc_name_index as usize);
 
-        let era_filter = if role == NpcRole::Enemy {
-            // Enemies don't spawn in the ancient era for now
-            Some(vec![1, 2, 3, 4, 5])
+        let year_range = if role == NpcRole::Enemy {
+            // Enemies don't spawn in the deep past (before 1000 BCE)
+            Some((-1000_i64, 5000_i64))
         } else {
             None
         };
@@ -75,7 +75,7 @@ pub fn generate_spawn_points(cx: i32, cz: i32, chunk_size: f32) -> Vec<NpcSpawnP
                 interaction_radius: 3.0,
                 color: role.color(),
             },
-            era_filter,
+            year_range,
         });
     }
 
@@ -159,14 +159,14 @@ mod tests {
     }
 
     #[test]
-    fn test_era_filter_on_enemies() {
-        // Generate many chunks and check any enemies have era filters
+    fn test_year_range_on_enemies() {
+        // Generate many chunks and check any enemies have year range filters
         for cx in 0..50 {
             for cz in 0..2 {
                 let points = generate_spawn_points(cx, cz, 64.0);
                 for p in &points {
                     if p.data.role == NpcRole::Enemy {
-                        assert!(p.era_filter.is_some(), "enemies should have era filter");
+                        assert!(p.year_range.is_some(), "enemies should have year range filter");
                     }
                 }
             }

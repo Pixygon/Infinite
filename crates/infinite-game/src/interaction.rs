@@ -36,8 +36,8 @@ pub struct InteractionSaveData {
 pub enum InteractableKind {
     /// A sign that displays text when read
     Sign { text: String },
-    /// A portal that changes the era when entered
-    EraPortal { target_era: usize },
+    /// A portal that transports the player to a different year
+    TimePortal { target_year: i64 },
     /// An item that can be picked up
     Pickup { item_name: String },
     /// An NPC that can be talked to
@@ -59,8 +59,8 @@ pub enum InteractableKind {
 pub enum InteractionResult {
     /// Show text to the player (from a sign)
     ShowText(String),
-    /// Change to a different era
-    ChangeEra(usize),
+    /// Travel to a different year
+    ChangeTimePeriod(i64),
     /// Pick up an item
     PickupItem(String),
     /// Talk to an NPC
@@ -105,10 +105,10 @@ impl Interactable {
         }
     }
 
-    /// Create an era portal interactable
-    pub fn era_portal(position: Vec3, target_era: usize, label: impl Into<String>) -> Self {
+    /// Create a time portal interactable
+    pub fn time_portal(position: Vec3, target_year: i64, label: impl Into<String>) -> Self {
         Self {
-            kind: InteractableKind::EraPortal { target_era },
+            kind: InteractableKind::TimePortal { target_year },
             position,
             interaction_radius: 4.0,
             prompt: format!("Enter {}", label.into()),
@@ -340,8 +340,8 @@ impl InteractionSystem {
 
         let result = match &interactable.kind {
             InteractableKind::Sign { text } => InteractionResult::ShowText(text.clone()),
-            InteractableKind::EraPortal { target_era } => {
-                InteractionResult::ChangeEra(*target_era)
+            InteractableKind::TimePortal { target_year } => {
+                InteractionResult::ChangeTimePeriod(*target_year)
             }
             InteractableKind::Pickup { item_name } => {
                 InteractionResult::PickupItem(item_name.clone())
@@ -565,12 +565,12 @@ mod tests {
     }
 
     #[test]
-    fn test_era_portal_interaction() {
+    fn test_time_portal_interaction() {
         let mut system = InteractionSystem::new();
-        system.add(Interactable::era_portal(
+        system.add(Interactable::time_portal(
             Vec3::new(0.0, 0.0, -2.0),
-            5,
-            "Far Future",
+            3025,
+            "Year 3025",
         ));
 
         system.update(Vec3::ZERO, Vec3::new(0.0, 0.0, -1.0));
@@ -578,8 +578,8 @@ mod tests {
         let result = system.interact();
         assert!(result.is_some());
         match result.unwrap() {
-            InteractionResult::ChangeEra(era) => assert_eq!(era, 5),
-            _ => panic!("Expected ChangeEra result"),
+            InteractionResult::ChangeTimePeriod(year) => assert_eq!(year, 3025),
+            _ => panic!("Expected ChangeTimePeriod result"),
         }
     }
 

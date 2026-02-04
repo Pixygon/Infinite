@@ -12,7 +12,7 @@ pub enum ApplicationState {
     /// Character creation screen
     CharacterCreation,
     /// Settings menu with return target
-    Settings { return_to: Box<ApplicationState> },
+    Settings { _return_to: Box<ApplicationState> },
     /// Game is paused
     Paused,
     /// Save/Load menu (accessed from pause)

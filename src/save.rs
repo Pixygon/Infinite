@@ -1,6 +1,6 @@
 //! Save/load system with named save slots, quicksave, and auto-save
 //!
-//! Persists player position, rotation, era, time of day, collected items,
+//! Persists player position, rotation, active year, time of day, collected items,
 //! and interaction states to JSON files.
 
 use anyhow::{Context, Result};
@@ -50,8 +50,8 @@ pub struct PlayerSaveData {
 /// Saved world state
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorldSaveData {
-    /// Active era index in the timeline
-    pub era_index: usize,
+    /// Active year on the timeline
+    pub active_year: i64,
     /// Time of day in hours (0.0 - 24.0)
     pub time_of_day: f32,
 }
@@ -68,8 +68,8 @@ pub struct SaveSlotInfo {
     pub timestamp: String,
     /// Character name
     pub character_name: String,
-    /// Era index
-    pub era_index: usize,
+    /// Active year
+    pub active_year: i64,
     /// Play time in seconds
     pub play_time_seconds: f64,
 }
@@ -120,6 +120,7 @@ pub fn load_game() -> Result<SaveData> {
 }
 
 /// Check if a quicksave file exists
+#[allow(dead_code)]
 pub fn has_quicksave() -> bool {
     quicksave_path().map(|p| p.exists()).unwrap_or(false)
 }
@@ -181,7 +182,7 @@ pub fn list_save_slots() -> Result<Vec<SaveSlotInfo>> {
                 slot_name: data.slot_name,
                 timestamp: data.timestamp,
                 character_name: data.player.character_name,
-                era_index: data.world.era_index,
+                active_year: data.world.active_year,
                 play_time_seconds: data.play_time_seconds,
             });
         }
@@ -234,7 +235,7 @@ mod tests {
                 character_name: "TestPlayer".to_string(),
             },
             world: WorldSaveData {
-                era_index: 3,
+                active_year: 2025,
                 time_of_day: 14.5,
             },
             timestamp: "2025-01-01 12:00:00".to_string(),
@@ -255,7 +256,7 @@ mod tests {
         assert_eq!(loaded.player.position, [10.0, 5.0, -3.0]);
         assert_eq!(loaded.player.rotation_yaw, 1.5);
         assert_eq!(loaded.player.character_name, "TestPlayer");
-        assert_eq!(loaded.world.era_index, 3);
+        assert_eq!(loaded.world.active_year, 2025);
         assert_eq!(loaded.world.time_of_day, 14.5);
         assert_eq!(loaded.collected_items, vec!["Gem"]);
         assert_eq!(loaded.play_time_seconds, 3661.0);
@@ -274,7 +275,7 @@ mod tests {
         // Load
         let loaded = load_game().unwrap();
         assert_eq!(loaded.player.position, data.player.position);
-        assert_eq!(loaded.world.era_index, data.world.era_index);
+        assert_eq!(loaded.world.active_year, data.world.active_year);
     }
 
     #[test]

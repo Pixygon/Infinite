@@ -50,6 +50,7 @@ pub fn save_character(character: &CharacterData) -> Result<PathBuf> {
 }
 
 /// Load a character from disk by filename (without extension)
+#[allow(dead_code)]
 pub fn load_character(filename: &str) -> Result<CharacterData> {
     let dir = characters_dir()?;
     let path = dir.join(format!("{}.json", filename));
@@ -65,6 +66,7 @@ pub fn load_character(filename: &str) -> Result<CharacterData> {
 }
 
 /// Load a character by ID
+#[allow(dead_code)]
 pub fn load_character_by_id(id: &str) -> Result<CharacterData> {
     let characters = list_characters()?;
 
@@ -78,6 +80,7 @@ pub fn load_character_by_id(id: &str) -> Result<CharacterData> {
 }
 
 /// List all saved characters
+#[allow(dead_code)]
 pub fn list_characters() -> Result<Vec<(String, CharacterData)>> {
     let dir = characters_dir()?;
 
@@ -108,6 +111,7 @@ pub fn list_characters() -> Result<Vec<(String, CharacterData)>> {
 }
 
 /// Delete a character by filename
+#[allow(dead_code)]
 pub fn delete_character(filename: &str) -> Result<()> {
     let dir = characters_dir()?;
     let path = dir.join(format!("{}.json", filename));
@@ -121,6 +125,7 @@ pub fn delete_character(filename: &str) -> Result<()> {
 }
 
 /// Check if any characters exist
+#[allow(dead_code)]
 pub fn has_characters() -> bool {
     list_characters().map(|c| !c.is_empty()).unwrap_or(false)
 }

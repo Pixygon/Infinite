@@ -119,6 +119,7 @@ impl Default for VideoSettings {
 
 impl VideoSettings {
     /// Get the resolution as a tuple
+    #[allow(dead_code)]
     pub fn resolution(&self) -> (u32, u32) {
         (self.width, self.height)
     }

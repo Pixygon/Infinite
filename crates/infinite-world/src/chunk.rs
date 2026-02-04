@@ -8,7 +8,7 @@ use glam::Vec3;
 use infinite_physics::PhysicsWorld;
 use rapier3d::prelude::ColliderHandle;
 
-use crate::era_config::EraTerrainConfig;
+use crate::era_config::TimeTerrainConfig;
 use crate::terrain::{Terrain, TerrainConfig};
 
 /// Grid coordinate for a chunk
@@ -96,8 +96,8 @@ pub struct ChunkManager {
     pub terrain_config: TerrainConfig,
     /// Currently loaded chunks
     loaded_chunks: HashMap<ChunkCoord, Chunk>,
-    /// Current era terrain modifiers
-    era_config: Option<EraTerrainConfig>,
+    /// Current time-period terrain modifiers
+    time_terrain_config: Option<TimeTerrainConfig>,
     /// Chunks that were just loaded this frame (for mesh creation)
     pub newly_loaded: Vec<ChunkCoord>,
     /// Chunks that were just unloaded this frame (for mesh cleanup)
@@ -111,20 +111,20 @@ impl ChunkManager {
             config,
             terrain_config,
             loaded_chunks: HashMap::new(),
-            era_config: None,
+            time_terrain_config: None,
             newly_loaded: Vec::new(),
             newly_unloaded: Vec::new(),
         }
     }
 
-    /// Set the era terrain config (triggers full reload on next update)
-    pub fn set_era_config(&mut self, era_config: Option<EraTerrainConfig>) {
-        self.era_config = era_config;
+    /// Set the time-period terrain config (triggers full reload on next update)
+    pub fn set_time_terrain_config(&mut self, config: Option<TimeTerrainConfig>) {
+        self.time_terrain_config = config;
     }
 
-    /// Get the current era config
-    pub fn era_config(&self) -> Option<&EraTerrainConfig> {
-        self.era_config.as_ref()
+    /// Get the current time-period terrain config
+    pub fn time_terrain_config(&self) -> Option<&TimeTerrainConfig> {
+        self.time_terrain_config.as_ref()
     }
 
     /// Get the chunk coordinate for a world position
@@ -148,7 +148,7 @@ impl ChunkManager {
     }
 
     /// Unload all chunks and reload around the given position.
-    /// Used for era transitions.
+    /// Used for time-period transitions.
     pub fn reload_all(&mut self, player_pos: Vec3, physics: &mut PhysicsWorld) {
         // Unload everything
         let coords: Vec<ChunkCoord> = self.loaded_chunks.keys().copied().collect();
@@ -231,11 +231,11 @@ impl ChunkManager {
             lacunarity: self.terrain_config.lacunarity,
         };
 
-        // Apply era modifiers if present
-        if let Some(era) = &self.era_config {
-            chunk_terrain_config.seed = chunk_terrain_config.seed.wrapping_add(era.seed_offset);
-            chunk_terrain_config.max_height *= era.height_scale;
-            chunk_terrain_config.noise_scale *= era.noise_scale_mult;
+        // Apply time-period terrain modifiers if present
+        if let Some(tc) = &self.time_terrain_config {
+            chunk_terrain_config.seed = chunk_terrain_config.seed.wrapping_add(tc.seed_offset);
+            chunk_terrain_config.max_height *= tc.height_scale;
+            chunk_terrain_config.noise_scale *= tc.noise_scale_mult;
         }
 
         // Generate terrain for this chunk at its world offset

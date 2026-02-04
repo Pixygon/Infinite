@@ -10,5 +10,5 @@ pub mod time;
 pub mod types;
 
 pub use glam::{Mat4, Quat, Vec2, Vec3, Vec4};
-pub use time::{Era, GameTime, TimeConfig, Timeline};
+pub use time::{GameTime, TimeConfig, Timeline};
 pub use types::{Color, EntityId, Transform};

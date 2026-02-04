@@ -42,15 +42,15 @@ impl NpcManager {
     pub fn on_chunk_loaded(
         &mut self,
         coord: ChunkCoord,
-        era_index: usize,
+        active_year: i64,
         height_fn: impl Fn(f32, f32) -> f32,
     ) {
         let spawn_points = generate_spawn_points(coord.x, coord.z, self.chunk_size);
         let origin = coord.world_origin(self.chunk_size);
 
         for point in &spawn_points {
-            if let Some(ref filter) = point.era_filter {
-                if !filter.contains(&era_index) {
+            if let Some((min_year, max_year)) = point.year_range {
+                if active_year < min_year || active_year > max_year {
                     continue;
                 }
             }
@@ -438,7 +438,7 @@ mod tests {
     fn test_manager_spawn_despawn() {
         let mut mgr = NpcManager::new(64.0);
         let coord = ChunkCoord::new(5, 7);
-        mgr.on_chunk_loaded(coord, 3, test_height);
+        mgr.on_chunk_loaded(coord, 2025, test_height);
         let count_before = mgr.count();
 
         mgr.on_chunk_unloaded(coord);
@@ -449,7 +449,7 @@ mod tests {
     #[test]
     fn test_manager_update_no_crash() {
         let mut mgr = NpcManager::new(64.0);
-        mgr.on_chunk_loaded(ChunkCoord::new(0, 0), 3, test_height);
+        mgr.on_chunk_loaded(ChunkCoord::new(0, 0), 2025, test_height);
         // Should not crash
         mgr.update(0.016, Vec3::ZERO, test_height);
         mgr.update(0.016, Vec3::new(10.0, 0.0, 10.0), test_height);
@@ -461,7 +461,7 @@ mod tests {
         // Load enough chunks to get at least one NPC
         for x in 0..10 {
             for z in 0..10 {
-                mgr.on_chunk_loaded(ChunkCoord::new(x, z), 3, test_height);
+                mgr.on_chunk_loaded(ChunkCoord::new(x, z), 2025, test_height);
             }
         }
         if mgr.count() > 0 {
@@ -476,7 +476,7 @@ mod tests {
     fn test_behavior_transitions() {
         let mut mgr = NpcManager::new(64.0);
         for x in 0..10 {
-            mgr.on_chunk_loaded(ChunkCoord::new(x, 0), 3, test_height);
+            mgr.on_chunk_loaded(ChunkCoord::new(x, 0), 2025, test_height);
         }
 
         // Run enough updates for state transitions

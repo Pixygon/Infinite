@@ -1,166 +1,113 @@
 //! Time system for the Infinite engine
 //!
-//! Handles game time, delta time, and the era/timeline system for time travel mechanics.
+//! Handles game time, delta time, and the timeline system for time travel mechanics.
+//! The world exists on a continuous year-based timeline. The "present" is a specific
+//! year (for MMO mode), and single-player stories can start at any date.
 
 use serde::{Deserialize, Serialize};
 
-/// Configuration for past eras
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PastConfig {
-    /// Name of this historical period
-    pub name: String,
-    /// How many years in the past (relative to Present)
-    pub years_ago: u64,
-    /// Description of this era
-    pub description: String,
-}
-
-/// Configuration for future eras
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct FutureConfig {
-    /// Name of this future period
-    pub name: String,
-    /// How many years in the future (relative to Present)
-    pub years_ahead: u64,
-    /// Description of this speculative future
-    pub description: String,
-}
-
-/// Represents different time periods the player can travel to
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum Era {
-    /// Historical periods - freely explorable in single-player
-    Past(PastConfig),
-    /// The "now" - MMO players are locked here, synced to real time
-    Present,
-    /// Speculative futures - freely explorable in single-player
-    Future(FutureConfig),
-}
-
-impl Era {
-    /// Create a past era with the given parameters
-    pub fn past(name: impl Into<String>, years_ago: u64, description: impl Into<String>) -> Self {
-        Era::Past(PastConfig {
-            name: name.into(),
-            years_ago,
-            description: description.into(),
-        })
-    }
-
-    /// Create a future era with the given parameters
-    pub fn future(
-        name: impl Into<String>,
-        years_ahead: u64,
-        description: impl Into<String>,
-    ) -> Self {
-        Era::Future(FutureConfig {
-            name: name.into(),
-            years_ahead,
-            description: description.into(),
-        })
-    }
-
-    /// Get the display name of this era
-    pub fn name(&self) -> &str {
-        match self {
-            Era::Past(config) => &config.name,
-            Era::Present => "Present",
-            Era::Future(config) => &config.name,
-        }
-    }
-
-    /// Check if this is a past era
-    pub fn is_past(&self) -> bool {
-        matches!(self, Era::Past(_))
-    }
-
-    /// Check if this is the present era
-    pub fn is_present(&self) -> bool {
-        matches!(self, Era::Present)
-    }
-
-    /// Check if this is a future era
-    pub fn is_future(&self) -> bool {
-        matches!(self, Era::Future(_))
-    }
-}
-
-impl Default for Era {
-    fn default() -> Self {
-        Era::Present
-    }
-}
-
-/// A timeline containing multiple eras
+/// A timeline representing the game's continuous time system.
+///
+/// Rather than fixed eras, the world uses a year-based timeline where any year
+/// can be visited. The same location changes organically over time — ancient ruins
+/// in one period might be a thriving castle in another.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Timeline {
-    /// All available eras in this timeline
-    pub eras: Vec<Era>,
-    /// Currently active era index
-    pub active_era: usize,
+    /// The year the player is currently in
+    pub active_year: i64,
+    /// The "present" year (used for MMO sync; single-player can be anywhere)
+    pub present_year: i64,
+    /// Minimum allowed year (how far back the timeline goes)
+    pub min_year: i64,
+    /// Maximum allowed year (how far forward the timeline goes)
+    pub max_year: i64,
 }
 
 impl Default for Timeline {
     fn default() -> Self {
         Self {
-            eras: vec![
-                Era::past("Ancient", 10000, "The dawn of civilization"),
-                Era::past("Medieval", 1000, "Knights and castles"),
-                Era::past("Industrial", 200, "Steam and steel"),
-                Era::Present,
-                Era::future("Near Future", 100, "Technology ascendant"),
-                Era::future("Far Future", 1000, "Among the stars"),
-            ],
-            active_era: 3, // Present
+            active_year: 2025,
+            present_year: 2025,
+            min_year: -10000,
+            max_year: 5000,
         }
     }
 }
 
 impl Timeline {
-    /// Get the currently active era
-    pub fn current_era(&self) -> &Era {
-        &self.eras[self.active_era]
+    /// Create a new timeline starting at a specific year
+    pub fn new(start_year: i64, present_year: i64) -> Self {
+        Self {
+            active_year: start_year,
+            present_year,
+            min_year: -10000,
+            max_year: 5000,
+        }
     }
 
-    /// Travel to a different era by index
-    pub fn travel_to(&mut self, era_index: usize) -> Result<(), TimelineError> {
-        if era_index >= self.eras.len() {
-            return Err(TimelineError::InvalidEra(era_index));
+    /// Get a display label for the current year
+    pub fn year_label(&self) -> String {
+        format_year(self.active_year)
+    }
+
+    /// Check if the player is in the present
+    pub fn is_present(&self) -> bool {
+        self.active_year == self.present_year
+    }
+
+    /// Check if the player is in the past (before present)
+    pub fn is_past(&self) -> bool {
+        self.active_year < self.present_year
+    }
+
+    /// Check if the player is in the future (after present)
+    pub fn is_future(&self) -> bool {
+        self.active_year > self.present_year
+    }
+
+    /// How many years from the present the active year is (signed: negative = past)
+    pub fn years_from_present(&self) -> i64 {
+        self.active_year - self.present_year
+    }
+
+    /// Travel to a specific year
+    pub fn travel_to_year(&mut self, year: i64) -> Result<(), TimelineError> {
+        if year < self.min_year || year > self.max_year {
+            return Err(TimelineError::YearOutOfRange {
+                year,
+                min: self.min_year,
+                max: self.max_year,
+            });
         }
-        self.active_era = era_index;
+        self.active_year = year;
         Ok(())
     }
 
-    /// Travel to the next era (forward in time)
-    pub fn travel_forward(&mut self) -> Result<(), TimelineError> {
-        if self.active_era >= self.eras.len() - 1 {
-            return Err(TimelineError::AtEndOfTimeline);
-        }
-        self.active_era += 1;
-        Ok(())
+    /// Travel forward by a number of years
+    pub fn travel_forward(&mut self, years: i64) -> Result<(), TimelineError> {
+        self.travel_to_year(self.active_year + years)
     }
 
-    /// Travel to the previous era (backward in time)
-    pub fn travel_backward(&mut self) -> Result<(), TimelineError> {
-        if self.active_era == 0 {
-            return Err(TimelineError::AtBeginningOfTimeline);
-        }
-        self.active_era -= 1;
-        Ok(())
+    /// Travel backward by a number of years
+    pub fn travel_backward(&mut self, years: i64) -> Result<(), TimelineError> {
+        self.travel_to_year(self.active_year - years)
+    }
+}
+
+/// Format a year for display (e.g., "500 BCE", "2025 CE", "3500 CE")
+pub fn format_year(year: i64) -> String {
+    if year <= 0 {
+        format!("{} BCE", 1 - year)
+    } else {
+        format!("{} CE", year)
     }
 }
 
 /// Errors that can occur during timeline operations
 #[derive(Debug, Clone, thiserror::Error)]
 pub enum TimelineError {
-    #[error("Invalid era index: {0}")]
-    InvalidEra(usize),
-
-    #[error("Already at the end of the timeline")]
-    AtEndOfTimeline,
-
-    #[error("Already at the beginning of the timeline")]
-    AtBeginningOfTimeline,
+    #[error("Year {year} is out of range ({min}..{max})")]
+    YearOutOfRange { year: i64, min: i64, max: i64 },
 }
 
 /// Configuration for game time
@@ -287,16 +234,42 @@ mod tests {
     #[test]
     fn test_timeline_travel() {
         let mut timeline = Timeline::default();
-        assert!(timeline.current_era().is_present());
+        assert!(timeline.is_present());
 
-        timeline.travel_backward().unwrap();
-        assert!(timeline.current_era().is_past());
+        timeline.travel_backward(1000).unwrap();
+        assert!(timeline.is_past());
+        assert_eq!(timeline.active_year, 1025);
 
-        timeline.travel_forward().unwrap();
-        assert!(timeline.current_era().is_present());
+        timeline.travel_forward(1000).unwrap();
+        assert!(timeline.is_present());
 
-        timeline.travel_forward().unwrap();
-        assert!(timeline.current_era().is_future());
+        timeline.travel_forward(500).unwrap();
+        assert!(timeline.is_future());
+        assert_eq!(timeline.active_year, 2525);
+    }
+
+    #[test]
+    fn test_timeline_year_out_of_range() {
+        let mut timeline = Timeline::default();
+        assert!(timeline.travel_to_year(-20000).is_err());
+        assert!(timeline.travel_to_year(10000).is_err());
+        assert!(timeline.travel_to_year(3000).is_ok());
+    }
+
+    #[test]
+    fn test_format_year() {
+        assert_eq!(format_year(2025), "2025 CE");
+        assert_eq!(format_year(0), "1 BCE");
+        assert_eq!(format_year(-999), "1000 BCE");
+        assert_eq!(format_year(1), "1 CE");
+    }
+
+    #[test]
+    fn test_year_label() {
+        let timeline = Timeline::new(-5000, 2025);
+        assert_eq!(timeline.year_label(), "5001 BCE");
+        assert!(timeline.is_past());
+        assert_eq!(timeline.years_from_present(), -7025);
     }
 
     #[test]

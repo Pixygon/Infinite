@@ -73,6 +73,7 @@ impl CharacterData {
     }
 
     /// Set the character's archetype
+    #[allow(dead_code)]
     pub fn set_archetype(&mut self, archetype: Archetype) {
         self.archetype = Some(archetype);
     }
@@ -93,6 +94,7 @@ pub enum Archetype {
     ParadoxWeaver,
 }
 
+#[allow(dead_code)]
 impl Archetype {
     /// Get the display name
     pub fn name(&self) -> &'static str {

@@ -64,7 +64,7 @@ impl PauseMenu {
                 // Settings
                 if pause_button(ui, "Settings", button_size) {
                     transition = StateTransition::Push(ApplicationState::Settings {
-                        return_to: Box::new(ApplicationState::Paused),
+                        _return_to: Box::new(ApplicationState::Paused),
                     });
                 }
 

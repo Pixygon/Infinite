@@ -13,7 +13,7 @@ use std::time::Instant;
 
 use anyhow::{Context, Result};
 use egui_winit_vulkano::{Gui, GuiConfig};
-use tracing::{debug, info, Level};
+use tracing::{info, Level};
 use tracing_subscriber::FmtSubscriber;
 use vulkano::{
     buffer::{Buffer, BufferCreateInfo, BufferUsage, Subbuffer},
@@ -30,10 +30,10 @@ use vulkano::{
     image::{view::ImageView, Image, ImageCreateInfo, ImageUsage},
     instance::{
         debug::{
-            DebugUtilsMessageSeverity, DebugUtilsMessageType, DebugUtilsMessenger,
+            DebugUtilsMessageSeverity, DebugUtilsMessenger,
             DebugUtilsMessengerCreateInfo,
         },
-        Instance, InstanceCreateFlags, InstanceCreateInfo, InstanceExtensions,
+        Instance, InstanceCreateFlags, InstanceCreateInfo,
     },
     memory::allocator::{AllocationCreateInfo, MemoryTypeFilter, StandardMemoryAllocator},
     pipeline::{
@@ -66,9 +66,9 @@ use winit::{
 };
 
 use glam::{Mat4, Vec3};
-use infinite_core::{GameTime, Timeline};
+use infinite_core::{GameTime, Timeline, time::format_year};
 use infinite_game::{
-    CameraController, InputAction, InputHandler, Interactable, InteractableId, InteractionResult,
+    CameraController, InputAction, InputHandler, Interactable, InteractionResult,
     InteractionSystem, NpcId, PlayerController,
 };
 use infinite_game::npc::combat::PlayerCombatState;
@@ -77,8 +77,8 @@ use infinite_game::npc::manager::NpcManager;
 use infinite_physics::PhysicsWorld;
 use infinite_render::{BasicPushConstants, Mesh, SkyMesh, SkyPushConstants, Vertex3D, SkyVertex};
 use infinite_world::{
-    ChunkConfig, ChunkCoord, ChunkManager, EraTerrainConfig, Terrain, TerrainConfig, TimeOfDay,
-    Weather, WeatherState,
+    ChunkConfig, ChunkCoord, ChunkManager, TimeTerrainConfig, Terrain, TerrainConfig, TimeOfDay,
+    Weather,
 };
 
 use crate::character::CharacterData;
@@ -112,7 +112,7 @@ struct RenderContext {
     framebuffers: Vec<Arc<Framebuffer>>,
     memory_allocator: Arc<StandardMemoryAllocator>,
     command_buffer_allocator: Arc<StandardCommandBufferAllocator>,
-    descriptor_set_allocator: Arc<StandardDescriptorSetAllocator>,
+    _descriptor_set_allocator: Arc<StandardDescriptorSetAllocator>,
     recreate_swapchain: bool,
     previous_frame_end: Option<Box<dyn GpuFuture>>,
 
@@ -213,14 +213,14 @@ struct InfiniteApp {
     notification_text: Option<String>,
     /// Timer for hiding notification
     notification_timer: f32,
-    /// Era transition fade alpha (0.0 = clear, 1.0 = black)
-    era_transition_alpha: f32,
-    /// Target era for pending transition (-1 = none)
-    pending_era_transition: Option<usize>,
-    /// Whether we're in the middle of an era transition
-    era_transitioning: bool,
-    /// Source era index for tinted transition
-    era_transition_source: usize,
+    /// Time transition fade alpha (0.0 = clear, 1.0 = black)
+    time_transition_alpha: f32,
+    /// Target year for pending transition
+    pending_time_transition: Option<i64>,
+    /// Whether we're in the middle of a time transition
+    time_transitioning: bool,
+    /// Source year for tinted transition
+    time_transition_source: i64,
 
     // Climbing state
     /// Whether the player is currently climbing a ladder
@@ -289,10 +289,10 @@ impl InfiniteApp {
             interaction_text_timer: 0.0,
             notification_text: None,
             notification_timer: 0.0,
-            era_transition_alpha: 0.0,
-            pending_era_transition: None,
-            era_transitioning: false,
-            era_transition_source: 3,
+            time_transition_alpha: 0.0,
+            pending_time_transition: None,
+            time_transitioning: false,
+            time_transition_source: 2025,
 
             climbing: false,
             climb_direction: Vec3::ZERO,
@@ -334,9 +334,12 @@ impl InfiniteApp {
 
         let mut chunk_manager = ChunkManager::new(chunk_config.clone(), terrain_config.clone());
 
-        // Apply era config if not Present (index 3)
-        if self.timeline.active_era != 3 {
-            chunk_manager.set_era_config(Some(EraTerrainConfig::for_era(self.timeline.active_era)));
+        // Apply time-period terrain config if not in the present year
+        if !self.timeline.is_present() {
+            chunk_manager.set_time_terrain_config(Some(TimeTerrainConfig::for_year(
+                self.timeline.active_year,
+                self.timeline.present_year,
+            )));
         }
 
         // Initial chunk load around spawn
@@ -380,11 +383,11 @@ impl InfiniteApp {
 
         // Create NPC manager and spawn NPCs for initial chunks
         let mut npc_manager = NpcManager::new(chunk_config.chunk_size);
-        let era_index = self.timeline.active_era;
+        let active_year = self.timeline.active_year;
         for chunk in chunk_manager.loaded_chunks() {
             let coord = chunk.coord;
             let cm_ref = &chunk_manager;
-            npc_manager.on_chunk_loaded(coord, era_index, |x, z| cm_ref.height_at(x, z));
+            npc_manager.on_chunk_loaded(coord, active_year, |x, z| cm_ref.height_at(x, z));
         }
         self.npc_manager = Some(npc_manager);
 
@@ -432,16 +435,16 @@ impl InfiniteApp {
             Vec3::new(-10.0, spawn_height + 1.0, 0.0),
             "The terrain stretches infinitely in all directions.\nChunks load and unload as you walk.",
         ));
-        // Era portals for testing
-        self.interaction_system.add(Interactable::era_portal(
+        // Time portals for testing
+        self.interaction_system.add(Interactable::time_portal(
             Vec3::new(20.0, spawn_height + 1.0, 0.0),
-            0,
-            "Ancient Era",
+            -5000,
+            "Ancient Past (5001 BCE)",
         ));
-        self.interaction_system.add(Interactable::era_portal(
+        self.interaction_system.add(Interactable::time_portal(
             Vec3::new(20.0, spawn_height + 1.0, 10.0),
-            5,
-            "Far Future",
+            3500,
+            "Far Future (3500 CE)",
         ));
 
         // Stateful interactables for testing
@@ -482,8 +485,8 @@ impl InfiniteApp {
         self.interaction_system.clear();
         self.interaction_text = None;
         self.notification_text = None;
-        self.era_transitioning = false;
-        self.pending_era_transition = None;
+        self.time_transitioning = false;
+        self.pending_time_transition = None;
         self.climbing = false;
         self.climb_remaining = 0.0;
 
@@ -513,7 +516,7 @@ impl InfiniteApp {
                 character_name: char_name,
             },
             world: WorldSaveData {
-                era_index: self.timeline.active_era,
+                active_year: self.timeline.active_year,
                 time_of_day: self.time_of_day.time_hours,
             },
             timestamp: chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string(),
@@ -571,13 +574,13 @@ impl InfiniteApp {
             camera.set_pitch(data.player.rotation_pitch);
         }
 
-        // Restore era (if different)
-        if data.world.era_index != self.timeline.active_era {
-            if !self.era_transitioning {
-                self.era_transition_source = self.timeline.active_era;
-                self.pending_era_transition = Some(data.world.era_index);
-                self.era_transitioning = true;
-                self.era_transition_alpha = 0.0;
+        // Restore year (if different)
+        if data.world.active_year != self.timeline.active_year {
+            if !self.time_transitioning {
+                self.time_transition_source = self.timeline.active_year;
+                self.pending_time_transition = Some(data.world.active_year);
+                self.time_transitioning = true;
+                self.time_transition_alpha = 0.0;
             }
         }
 
@@ -823,8 +826,8 @@ impl InfiniteApp {
                         // Loading complete, go to main menu
                         self.app_state = ApplicationState::MainMenu;
                         info!(
-                            "Loading complete - Era: {}",
-                            self.timeline.current_era().name()
+                            "Loading complete - Year: {}",
+                            self.timeline.year_label()
                         );
                     }
                 }
@@ -837,31 +840,31 @@ impl InfiniteApp {
                 self.time_of_day.update(delta);
                 self.weather.update(delta);
 
-                // --- Era transition fade ---
-                if self.era_transitioning {
-                    if let Some(target_era) = self.pending_era_transition {
-                        if self.era_transition_alpha < 1.0 {
+                // --- Time transition fade ---
+                if self.time_transitioning {
+                    if let Some(target_year) = self.pending_time_transition {
+                        if self.time_transition_alpha < 1.0 {
                             // Fade to black
-                            self.era_transition_alpha = (self.era_transition_alpha + delta * 2.0).min(1.0);
+                            self.time_transition_alpha = (self.time_transition_alpha + delta * 2.0).min(1.0);
                         } else {
-                            // At full black: switch era, regenerate terrain
-                            if let Err(e) = self.timeline.travel_to(target_era) {
-                                tracing::error!("Failed to travel to era {}: {}", target_era, e);
+                            // At full black: switch year, regenerate terrain
+                            if let Err(e) = self.timeline.travel_to_year(target_year) {
+                                tracing::error!("Failed to travel to year {}: {}", target_year, e);
                             } else {
-                                info!("Switched to era: {}", self.timeline.current_era().name());
+                                info!("Switched to year: {}", self.timeline.year_label());
                             }
 
-                            // Regenerate chunks with new era config
-                            let era_config = if target_era == 3 {
+                            // Regenerate chunks with new time-period terrain config
+                            let time_config = if self.timeline.is_present() {
                                 None
                             } else {
-                                Some(EraTerrainConfig::for_era(target_era))
+                                Some(TimeTerrainConfig::for_year(target_year, self.timeline.present_year))
                             };
 
                             if let (Some(chunk_manager), Some(physics)) =
                                 (&mut self.chunk_manager, &mut self.physics_world)
                             {
-                                chunk_manager.set_era_config(era_config);
+                                chunk_manager.set_time_terrain_config(time_config);
                                 let player_pos = self.player.as_ref()
                                     .map(|p| p.position())
                                     .unwrap_or(Vec3::ZERO);
@@ -890,9 +893,9 @@ impl InfiniteApp {
                                 }
                             }
 
-                            self.pending_era_transition = None;
+                            self.pending_time_transition = None;
 
-                            // Auto-save on era transition
+                            // Auto-save on time transition
                             if self.settings.gameplay.auto_save {
                                 self.do_autosave();
                                 self.auto_save_timer = self.settings.gameplay.auto_save_interval as f32;
@@ -900,9 +903,9 @@ impl InfiniteApp {
                         }
                     } else {
                         // No pending transition, fade back in
-                        self.era_transition_alpha = (self.era_transition_alpha - delta * 2.0).max(0.0);
-                        if self.era_transition_alpha <= 0.0 {
-                            self.era_transitioning = false;
+                        self.time_transition_alpha = (self.time_transition_alpha - delta * 2.0).max(0.0);
+                        if self.time_transition_alpha <= 0.0 {
+                            self.time_transitioning = false;
                         }
                     }
                 }
@@ -1014,7 +1017,7 @@ impl InfiniteApp {
                 if let (Some(npc_manager), Some(chunk_manager)) =
                     (&mut self.npc_manager, &self.chunk_manager)
                 {
-                    let era_index = self.timeline.active_era;
+                    let active_year = self.timeline.active_year;
 
                     // Despawn NPCs from unloaded chunks
                     for coord in &chunk_manager.newly_unloaded {
@@ -1024,7 +1027,7 @@ impl InfiniteApp {
                     // Spawn NPCs for newly loaded chunks
                     for coord in &chunk_manager.newly_loaded {
                         let cm_ref = chunk_manager;
-                        npc_manager.on_chunk_loaded(*coord, era_index, |x, z| cm_ref.height_at(x, z));
+                        npc_manager.on_chunk_loaded(*coord, active_year, |x, z| cm_ref.height_at(x, z));
                     }
                 }
 
@@ -1092,13 +1095,13 @@ impl InfiniteApp {
                                 self.interaction_text = Some(text);
                                 self.interaction_text_timer = 5.0;
                             }
-                            InteractionResult::ChangeEra(target_era) => {
-                                if !self.era_transitioning {
-                                    self.era_transition_source = self.timeline.active_era;
-                                    self.pending_era_transition = Some(target_era);
-                                    self.era_transitioning = true;
-                                    self.era_transition_alpha = 0.0;
-                                    info!("Starting era transition to era {}", target_era);
+                            InteractionResult::ChangeTimePeriod(target_year) => {
+                                if !self.time_transitioning {
+                                    self.time_transition_source = self.timeline.active_year;
+                                    self.pending_time_transition = Some(target_year);
+                                    self.time_transitioning = true;
+                                    self.time_transition_alpha = 0.0;
+                                    info!("Starting time transition to year {}", target_year);
                                 }
                             }
                             InteractionResult::PickupItem(name) => {
@@ -1293,10 +1296,6 @@ impl InfiniteApp {
         let mut pending_transition = StateTransition::None;
         let mut should_save_settings = false;
         let mut save_load_pending_action: Option<(StateTransition, SaveLoadAction)> = None;
-
-        // Collect data needed for UI rendering
-        let era_name = self.timeline.current_era().name().to_string();
-        let game_time = self.game_time.total_time;
 
         if let Some(gui) = &mut self.gui {
             gui.immediate_ui(|gui| {
@@ -1653,31 +1652,31 @@ impl InfiniteApp {
                                         });
                                 }
 
-                                // Era transition fade overlay (tinted per era)
-                                if self.era_transition_alpha > 0.01 {
-                                    let alpha = (self.era_transition_alpha * 255.0) as u8;
-                                    // Blend between source era tint and target era tint
+                                // Time transition fade overlay (tinted by time period)
+                                if self.time_transition_alpha > 0.01 {
+                                    let alpha = (self.time_transition_alpha * 255.0) as u8;
+                                    // Blend between source tint and target tint
                                     // First half fades to black through source tint,
                                     // second half fades from black through target tint
-                                    let (tint_r, tint_g, tint_b) = if self.era_transition_alpha > 0.5 {
-                                        // Fading to black: use source era tint, fade toward black
-                                        let (sr, sg, sb) = era_tint_color(self.era_transition_source);
-                                        let t = (self.era_transition_alpha - 0.5) * 2.0; // 0..1 as we approach full black
+                                    let (tint_r, tint_g, tint_b) = if self.time_transition_alpha > 0.5 {
+                                        // Fading to black: use source year tint, fade toward black
+                                        let (sr, sg, sb) = time_tint_color(self.time_transition_source, self.timeline.present_year);
+                                        let t = (self.time_transition_alpha - 0.5) * 2.0;
                                         let r = (sr as f32 * (1.0 - t)) as u8;
                                         let g = (sg as f32 * (1.0 - t)) as u8;
                                         let b = (sb as f32 * (1.0 - t)) as u8;
                                         (r, g, b)
                                     } else {
-                                        // Fading from black: use target era tint, fade from black
-                                        let target_era = self.timeline.active_era;
-                                        let (tr, tg, tb) = era_tint_color(target_era);
-                                        let t = self.era_transition_alpha * 2.0; // 0..1 as we fade away
+                                        // Fading from black: use target year tint, fade from black
+                                        let target_year = self.timeline.active_year;
+                                        let (tr, tg, tb) = time_tint_color(target_year, self.timeline.present_year);
+                                        let t = self.time_transition_alpha * 2.0;
                                         let r = (tr as f32 * (1.0 - t)) as u8;
                                         let g = (tg as f32 * (1.0 - t)) as u8;
                                         let b = (tb as f32 * (1.0 - t)) as u8;
                                         (r, g, b)
                                     };
-                                    egui::Area::new(egui::Id::new("era_transition"))
+                                    egui::Area::new(egui::Id::new("time_transition"))
                                         .fixed_pos([0.0, 0.0])
                                         .order(egui::Order::Foreground)
                                         .show(&ctx, |ui| {
@@ -1729,7 +1728,7 @@ impl InfiniteApp {
 
                                             ui.separator();
                                             ui.heading("World");
-                                            ui.label(format!("Era: {} ({})", self.timeline.current_era().name(), self.timeline.active_era));
+                                            ui.label(format!("Year: {}", self.timeline.year_label()));
                                             ui.label(format!("Time: {} ({})", self.time_of_day.formatted_time(), self.time_of_day.period_name()));
                                             ui.label(format!("Weather: {}", self.weather.current.name()));
 
@@ -1744,23 +1743,23 @@ impl InfiniteApp {
                                             }
                                             ui.label(format!("Player HP: {:.0}/{:.0}", self.player_combat.current_hp, self.player_combat.max_hp));
 
-                                            // Era selector buttons
+                                            // Time travel debug buttons
                                             ui.separator();
-                                            ui.heading("Era Selector");
-                                            let era_count = self.timeline.eras.len();
-                                            for i in 0..era_count {
-                                                let era_name = self.timeline.eras[i].name().to_string();
-                                                let is_active = self.timeline.active_era == i;
+                                            ui.heading("Time Travel");
+                                            let test_years: &[i64] = &[-5000, -1000, 1000, 2025, 2500, 3500];
+                                            for &year in test_years {
+                                                let label_text = format_year(year);
+                                                let is_active = self.timeline.active_year == year;
                                                 let label = if is_active {
-                                                    format!("> {} <", era_name)
+                                                    format!("> {} <", label_text)
                                                 } else {
-                                                    era_name
+                                                    label_text
                                                 };
-                                                if ui.button(&label).clicked() && !is_active && !self.era_transitioning {
-                                                    self.era_transition_source = self.timeline.active_era;
-                                                    self.pending_era_transition = Some(i);
-                                                    self.era_transitioning = true;
-                                                    self.era_transition_alpha = 0.0;
+                                                if ui.button(&label).clicked() && !is_active && !self.time_transitioning {
+                                                    self.time_transition_source = self.timeline.active_year;
+                                                    self.pending_time_transition = Some(year);
+                                                    self.time_transitioning = true;
+                                                    self.time_transition_alpha = 0.0;
                                                 }
                                             }
                                         });
@@ -2520,7 +2519,7 @@ impl ApplicationHandler for InfiniteApp {
             framebuffers,
             memory_allocator,
             command_buffer_allocator,
-            descriptor_set_allocator,
+            _descriptor_set_allocator: descriptor_set_allocator,
             recreate_swapchain: false,
             previous_frame_end: None,
             depth_buffer,
@@ -3016,16 +3015,29 @@ fn create_sky_pipeline(
     .ok()
 }
 
-/// Get tint color for era transitions
-fn era_tint_color(era_index: usize) -> (u8, u8, u8) {
-    match era_index {
-        0 => (180, 120, 40),   // Ancient: warm amber
-        1 => (120, 80, 40),    // Medieval: earthy brown
-        2 => (140, 100, 60),   // Industrial: grey-orange
-        3 => (0, 0, 0),        // Present: neutral black
-        4 => (40, 80, 160),    // Near Future: cool blue
-        5 => (60, 160, 200),   // Far Future: cyan-white
-        _ => (0, 0, 0),        // Unknown: black
+/// Get tint color for time transitions based on how far from the present
+fn time_tint_color(year: i64, present_year: i64) -> (u8, u8, u8) {
+    let years_from_present = year - present_year;
+    if years_from_present == 0 {
+        return (0, 0, 0); // Present: neutral black
+    }
+
+    let abs_years = years_from_present.unsigned_abs() as f32;
+
+    if years_from_present < 0 {
+        // Past: warm amber tones, more intense the further back
+        let t = (abs_years / 5000.0).min(1.0);
+        let r = (120.0 + t * 60.0) as u8;   // 120..180
+        let g = (80.0 + t * 40.0) as u8;    // 80..120
+        let b = (40.0) as u8;                // stays warm
+        (r, g, b)
+    } else {
+        // Future: cool blue tones, more intense the further forward
+        let t = (abs_years / 3000.0).min(1.0);
+        let r = (40.0 + t * 20.0) as u8;    // 40..60
+        let g = (80.0 + t * 80.0) as u8;    // 80..160
+        let b = (160.0 + t * 40.0) as u8;   // 160..200
+        (r, g, b)
     }
 }
 

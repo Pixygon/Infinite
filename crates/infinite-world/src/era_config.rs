@@ -1,13 +1,14 @@
-//! Per-era terrain configuration modifiers
+//! Year-based terrain configuration modifiers
 //!
-//! Different eras produce visually distinct terrain by modifying noise parameters.
+//! Different time periods produce visually distinct terrain by modifying noise parameters.
+//! Terrain changes smoothly based on how far from the present the active year is.
 
 use serde::{Deserialize, Serialize};
 
-/// Terrain modifiers for a specific era
+/// Terrain modifiers for a specific time period (year)
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct EraTerrainConfig {
-    /// Added to the base seed to produce different noise patterns per era
+pub struct TimeTerrainConfig {
+    /// Added to the base seed to produce different noise patterns per time period
     pub seed_offset: u32,
     /// Multiplier on max_height (1.0 = default)
     pub height_scale: f32,
@@ -15,55 +16,46 @@ pub struct EraTerrainConfig {
     pub noise_scale_mult: f32,
 }
 
-impl EraTerrainConfig {
-    /// Get terrain config for a given era index.
+impl TimeTerrainConfig {
+    /// Get terrain config for a given year, relative to the present year.
     ///
-    /// Default timeline:
-    /// 0 = Ancient, 1 = Medieval, 2 = Industrial, 3 = Present, 4 = Near Future, 5 = Far Future
-    pub fn for_era(era_index: usize) -> Self {
-        match era_index {
-            0 => Self {
-                // Ancient: dramatic, mountainous landscape
-                seed_offset: 300,
-                height_scale: 2.0,
-                noise_scale_mult: 0.6,
-            },
-            1 => Self {
-                // Medieval: rolling hills
-                seed_offset: 200,
-                height_scale: 1.5,
-                noise_scale_mult: 0.8,
-            },
-            2 => Self {
-                // Industrial: moderately hilly
-                seed_offset: 100,
-                height_scale: 1.2,
-                noise_scale_mult: 0.9,
-            },
-            3 => Self {
-                // Present: default terrain
+    /// Terrain characteristics change smoothly based on distance from present:
+    /// - Far past (>5000 years ago): dramatic, mountainous landscape
+    /// - Near past (~1000 years ago): rolling hills
+    /// - Present: default terrain
+    /// - Near future (~500 years ahead): slightly flatter, more detail
+    /// - Far future (>2000 years ahead): very flat, high-frequency detail
+    pub fn for_year(year: i64, present_year: i64) -> Self {
+        let years_from_present = year - present_year;
+
+        if years_from_present == 0 {
+            // Present: default terrain
+            return Self {
                 seed_offset: 0,
                 height_scale: 1.0,
                 noise_scale_mult: 1.0,
-            },
-            4 => Self {
-                // Near Future: slightly flatter, more detail
-                seed_offset: 400,
-                height_scale: 0.8,
-                noise_scale_mult: 1.3,
-            },
-            5 => Self {
-                // Far Future: very flat, high-frequency detail
-                seed_offset: 500,
-                height_scale: 0.6,
-                noise_scale_mult: 1.5,
-            },
-            _ => Self {
-                // Unknown era: use defaults
-                seed_offset: era_index as u32 * 100,
-                height_scale: 1.0,
-                noise_scale_mult: 1.0,
-            },
+            };
+        }
+
+        // Use absolute distance for magnitude, sign for direction
+        let abs_years = years_from_present.unsigned_abs() as f32;
+
+        if years_from_present < 0 {
+            // Past: terrain gets more dramatic the further back you go
+            let t = (abs_years / 5000.0).min(1.0); // normalize to 0..1 over 5000 years
+            Self {
+                seed_offset: (abs_years as u32 / 10).wrapping_mul(73),
+                height_scale: 1.0 + t * 1.0,         // 1.0 to 2.0
+                noise_scale_mult: 1.0 - t * 0.4,      // 1.0 to 0.6
+            }
+        } else {
+            // Future: terrain gets flatter and more detailed the further forward
+            let t = (abs_years / 3000.0).min(1.0); // normalize to 0..1 over 3000 years
+            Self {
+                seed_offset: (abs_years as u32 / 10).wrapping_mul(97),
+                height_scale: 1.0 - t * 0.4,         // 1.0 to 0.6
+                noise_scale_mult: 1.0 + t * 0.5,      // 1.0 to 1.5
+            }
         }
     }
 }
@@ -73,25 +65,31 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_different_eras_produce_different_configs() {
-        let past = EraTerrainConfig::for_era(1);
-        let present = EraTerrainConfig::for_era(3);
-        let future = EraTerrainConfig::for_era(5);
+    fn test_present_is_default() {
+        let config = TimeTerrainConfig::for_year(2025, 2025);
+        assert_eq!(config.seed_offset, 0);
+        assert_eq!(config.height_scale, 1.0);
+        assert_eq!(config.noise_scale_mult, 1.0);
+    }
 
-        // Each era should have a different seed offset
-        assert_ne!(past.seed_offset, present.seed_offset);
-        assert_ne!(present.seed_offset, future.seed_offset);
-
-        // Past should be taller, future should be flatter
+    #[test]
+    fn test_past_is_taller() {
+        let present = TimeTerrainConfig::for_year(2025, 2025);
+        let past = TimeTerrainConfig::for_year(25, 2025);
         assert!(past.height_scale > present.height_scale);
+    }
+
+    #[test]
+    fn test_future_is_flatter() {
+        let present = TimeTerrainConfig::for_year(2025, 2025);
+        let future = TimeTerrainConfig::for_year(4025, 2025);
         assert!(future.height_scale < present.height_scale);
     }
 
     #[test]
-    fn test_present_era_is_default() {
-        let present = EraTerrainConfig::for_era(3);
-        assert_eq!(present.seed_offset, 0);
-        assert_eq!(present.height_scale, 1.0);
-        assert_eq!(present.noise_scale_mult, 1.0);
+    fn test_different_years_different_seeds() {
+        let a = TimeTerrainConfig::for_year(1025, 2025);
+        let b = TimeTerrainConfig::for_year(3025, 2025);
+        assert_ne!(a.seed_offset, b.seed_offset);
     }
 }

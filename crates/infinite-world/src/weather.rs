@@ -80,7 +80,7 @@ impl Weather {
     /// Create with specific weather
     pub fn new(state: WeatherState) -> Self {
         let mut weather = Self::default();
-        weather.set_weather(state);
+        weather.set_weather_immediate(state);
         weather
     }
 

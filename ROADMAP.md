@@ -1,6 +1,6 @@
 # Infinite - Development Roadmap
 
-A Vulkan-based game engine in Rust powering **Infinite** — a game where players traverse time, playing different games within the game across Past, Present, and Future. Think *Like a Dragon* meets *Pokemon* meets time travel.
+A Vulkan-based game engine in Rust powering **Infinite** — a game where players traverse a continuous year-based timeline, playing different games within the game across any time period. Think *Like a Dragon* meets *Pokemon* meets time travel.
 
 ---
 
@@ -10,7 +10,7 @@ A Vulkan-based game engine in Rust powering **Infinite** — a game where player
 
 | System | Crate | Status |
 |--------|-------|--------|
-| Core types & time/era system | `infinite-core` | Done |
+| Core types & timeline system | `infinite-core` | Done |
 | Vulkan renderer + egui integration | `src/main.rs`, `infinite-render` | Done (forward renderer) |
 | Physics (rapier3d, heightfield terrain) | `infinite-physics` | Done |
 | Character controller (capsule, coyote time, jump buffer) | `infinite-game` | Done |
@@ -18,7 +18,7 @@ A Vulkan-based game engine in Rust powering **Infinite** — a game where player
 | Input system (action-based mapping) | `infinite-game` | Done |
 | Terrain generation (Perlin noise, biome coloring) | `infinite-world` | Done |
 | Time of day + sky color cycle | `infinite-world` | Done |
-| Era/Timeline system (Past/Present/Future) | `infinite-core` | Done |
+| Year-based timeline system | `infinite-core` | Done |
 | Character creator (sex, body, face, hair, skin — 100+ params) | `src/character/`, `src/ui/` | Done |
 | UI screens (loading, main menu, pause, settings, character creator) | `src/ui/` | Done |
 | Settings persistence (TOML) | `src/settings.rs` | Done |
@@ -85,7 +85,7 @@ A Vulkan-based game engine in Rust powering **Infinite** — a game where player
 - [x] Runtime volume updates via `update_volumes(config)`
 - [x] Per-frame cleanup of finished sound handles
 - [x] 7 unit tests passing (config, spatial math)
-- [ ] Era-specific ambient tracks (past: orchestral, present: electronic, future: synth)
+- [ ] Time-period ambient tracks (ancient: orchestral, modern: electronic, future: synth)
 - [ ] Sound priority system (limit concurrent sounds, drop lowest priority)
 - [ ] Audio occlusion (muffled sounds through walls)
 
@@ -104,48 +104,48 @@ A Vulkan-based game engine in Rust powering **Infinite** — a game where player
 
 ## Milestone 2: World & Exploration
 
-**Goal**: The player can walk through a streaming world, enter buildings, climb ladders, flip switches, and travel between eras.
+**Goal**: The player can walk through a streaming world, enter buildings, climb ladders, flip switches, and travel between time periods.
 
 ### 2.1 — Chunk Streaming
 
-- [ ] Chunk grid system (define chunk size, e.g., 64×64 meters)
-- [ ] Load/unload chunks based on player distance (ring buffer pattern)
-- [ ] Per-chunk terrain mesh + collider generation
-- [ ] Chunk data format (terrain heightmap, placed objects, NPC spawn points)
+- [x] Chunk grid system (define chunk size, e.g., 64×64 meters)
+- [x] Load/unload chunks based on player distance (ring buffer pattern)
+- [x] Per-chunk terrain mesh + collider generation
+- [x] Chunk data format (terrain heightmap, placed objects, NPC spawn points)
 - [ ] Background thread loading with `tokio::spawn_blocking`
 - [ ] LOD terrain for distant chunks (reduced subdivision)
 
-### 2.2 — Era Transitions
+### 2.2 — Time Travel Transitions
 
-- [ ] Per-chunk era variants (each chunk stores past/present/future data)
-- [ ] Transition trigger zones (portals, story events, items)
-- [ ] Visual transition effect (screen distortion, color shift, particle burst)
-- [ ] Audio crossfade between era ambient tracks
-- [ ] Gameplay differences per era (different buildings, NPCs, terrain features)
+- [x] Per-chunk time-period variants (terrain changes based on year)
+- [x] Transition trigger zones (time portals, story events, items)
+- [x] Visual transition effect (tinted fade, color shift, particle burst)
+- [ ] Audio crossfade between time-period ambient tracks
+- [ ] Gameplay differences per time period (different buildings, NPCs, terrain features)
 
 ### 2.3 — World Interactions
 
 Interactable objects the player can engage with via the `Interact` input action:
 
-- [ ] **Interaction system**: Raycast from camera, highlight nearest interactable, prompt UI
-- [ ] **Doors**: Open/close animation, locked/unlocked state, key requirements
-- [ ] **Levers/Switches**: Toggle state, trigger linked events (open gate, activate bridge)
-- [ ] **Ladders**: Enter climb mode, vertical movement, dismount at top/bottom
-- [ ] **Buttons**: Single-press triggers (elevators, traps, puzzles)
+- [x] **Interaction system**: Raycast from camera, highlight nearest interactable, prompt UI
+- [x] **Doors**: Open/close animation, locked/unlocked state, key requirements
+- [x] **Levers/Switches**: Toggle state, trigger linked events (open gate, activate bridge)
+- [x] **Ladders**: Enter climb mode, vertical movement, dismount at top/bottom
+- [x] **Buttons**: Single-press triggers (elevators, traps, puzzles)
 - [ ] **Pickups**: Items on the ground, collect into inventory on interact
-- [ ] **Signs/Readables**: Display text overlay when examined
-- [ ] **NPCs**: Initiate dialogue on interact (see Milestone 3)
-- [ ] **Containers**: Chests, crates — open to reveal loot
+- [x] **Signs/Readables**: Display text overlay when examined
+- [x] **NPCs**: Initiate dialogue on interact (see Milestone 3)
+- [x] **Containers**: Chests, crates — open to reveal loot
 - [ ] **Sit points**: Benches, chairs — play sit animation, optional rest mechanic
 - [ ] **Vehicles**: Mount/dismount (ties into racing sub-game)
 - [ ] **Arcade machines**: Enter sub-game on interact (see Milestone 9)
 
 ### 2.4 — Save/Load System
 
-- [ ] Local save serialization (serde → JSON or bincode)
-- [ ] Save slot UI (create, load, delete, auto-save indicator)
-- [ ] Save captures: player position, era, inventory, quest state, monster party, time-of-day
-- [ ] Auto-save on era transition, entering buildings, and timed interval
+- [x] Local save serialization (serde → JSON or bincode)
+- [x] Save slot UI (create, load, delete, auto-save indicator)
+- [x] Save captures: player position, active year, inventory, quest state, monster party, time-of-day
+- [x] Auto-save on time-period transition, entering buildings, and timed interval
 - [ ] Cloud sync via PixygonServer `/api/v1/savedata` (merge local + remote by timestamp)
 
 ---
@@ -156,10 +156,10 @@ Interactable objects the player can engage with via the `Interact` input action:
 
 ### 3.1 — NPC Foundation
 
-- [ ] `NpcData` struct: ID, name, species, faction, schedule, home position, role
-- [ ] NPC spawning per chunk (spawn point data in chunk definition)
+- [x] `NpcData` struct: ID, name, species, faction, schedule, home position, role
+- [x] NPC spawning per chunk (spawn point data in chunk definition)
 - [ ] NPC visual representation (animated mesh, nametag, faction indicator)
-- [ ] NPC despawn when chunk unloads, persist state changes
+- [x] NPC despawn when chunk unloads, persist state changes
 
 ### 3.2 — GOAP (Goal Oriented Action Planning)
 
@@ -184,7 +184,7 @@ Dialogue uses generated AI characters from PixygonServer's Character system:
 - [ ] **Dialogue UI**: Text box with character portrait, name, typing animation
 - [ ] **Character binding**: Each NPC links to a PixygonServer Character (personality, backstory, style)
 - [ ] **Dialogue flow**: Player approaches → interact → send context to AI → stream response
-- [ ] **Context injection**: NPC's current GOAP state, location, time of day, era, relationship level
+- [ ] **Context injection**: NPC's current GOAP state, location, time of day, active year, relationship level
 - [ ] **Response parsing**: Extract dialogue text, mood/expression changes, offered items/quests
 - [ ] **Conversation history**: Cache recent exchanges per NPC (store in save data)
 - [ ] **Offline fallback**: Pre-written dialogue trees for when AI is unavailable
@@ -197,7 +197,7 @@ Dialogue uses generated AI characters from PixygonServer's Character system:
 - [ ] Enemy NPC type with aggro radius, patrol path, combat stats
 - [ ] GOAP goals for enemies: `patrol`, `chase_player`, `attack`, `flee_when_low_hp`, `call_reinforcements`
 - [ ] Aggro/de-aggro based on distance and line-of-sight
-- [ ] Enemy spawning rules (era-dependent, time-of-day-dependent)
+- [ ] Enemy spawning rules (year-dependent, time-of-day-dependent)
 - [ ] Death/defeat handling: drop loot, grant XP, respawn timer
 
 ---
@@ -231,7 +231,7 @@ Dialogue uses generated AI characters from PixygonServer's Character system:
 - [ ] Ability types: melee, ranged, AoE, buff, debuff, heal
 - [ ] Cooldown system per ability
 - [ ] Mana/energy resource for ability usage
-- [ ] Era-themed abilities (past: melee/magic, present: tech/gadgets, future: energy/psychic)
+- [ ] Time-period themed abilities (ancient: melee/magic, modern: tech/gadgets, future: energy/psychic)
 
 ### 4.4 — Levelling & Progression
 
@@ -264,16 +264,16 @@ Dialogue uses generated AI characters from PixygonServer's Character system:
 - [ ] Visual change on character when equipping armor/weapons
 - [ ] Equipment comparison tooltip (show stat diff)
 - [ ] Set bonuses (wearing full matching set grants extra effect)
-- [ ] Era-locked equipment (some items only work in specific eras)
+- [ ] Time-period equipment (some items only work in certain time periods)
 
 ### 5.3 — Shops & Trading
 
 - [ ] Shop NPC interaction: opens shop UI
 - [ ] Shop inventory (per-NPC item list with prices)
 - [ ] Buy/sell with currency (coins, gems)
-- [ ] Price modifiers (reputation discount, era-based economy)
+- [ ] Price modifiers (reputation discount, time-period economy)
 - [ ] Sell-back at reduced price
-- [ ] Special merchants (rare items, era-exclusive stock)
+- [ ] Special merchants (rare items, time-period exclusive stock)
 
 ### 5.4 — Crafting
 
@@ -281,7 +281,7 @@ Dialogue uses generated AI characters from PixygonServer's Character system:
 - [ ] Crafting stations in the world (forge, alchemy table, workbench)
 - [ ] Recipe discovery (find recipe scrolls, learn from NPCs)
 - [ ] Crafting UI: select recipe, show required materials, craft button
-- [ ] Era-specific recipes (past: blacksmithing, present: engineering, future: nano-fabrication)
+- [ ] Time-period recipes (ancient: blacksmithing, modern: engineering, future: nano-fabrication)
 
 ### 5.5 — PixygonServer Sync
 
@@ -312,7 +312,7 @@ Infinite follows the *Like a Dragon* (Yakuza) approach: the open world is a hub 
 ### 6.2 — World Entry Points
 
 - [ ] In-world triggers for entering sub-games (NPCs, locations, items, arcade machines)
-- [ ] Sub-game availability varies by era (past: jousting arena, present: racing track, future: VR arcade)
+- [ ] Sub-game availability varies by time period (ancient: jousting arena, modern: racing track, future: VR arcade)
 - [ ] Visual indicators on map for sub-game locations
 - [ ] Sub-game progress tracked in journal/menu
 
@@ -332,7 +332,7 @@ Infinite follows the *Like a Dragon* (Yakuza) approach: the open world is a hub 
 
 ### 7.2 — Wild Encounters
 
-- [ ] Wild monster spawn zones per chunk (species, level range, rarity, era-specific)
+- [ ] Wild monster spawn zones per chunk (species, level range, rarity, time-period specific)
 - [ ] Encounter trigger: walk through tall grass, cave entry, time-of-day events
 - [ ] Wild monster 3D model display (use species mesh or placeholder with species colors)
 - [ ] Catch mechanic: weaken in battle → throw capture item → catch rate calculation
@@ -363,7 +363,7 @@ Infinite follows the *Like a Dragon* (Yakuza) approach: the open world is a hub 
 - [ ] XP gain from battles (`POST /api/v1/monsters/:userId/:monsterId/experience`)
 - [ ] EV gain from specific defeated species (`POST /api/v1/monsters/:userId/:monsterId/evs`)
 - [ ] Level-up move learning (`POST /api/v1/monsters/:userId/:monsterId/moves`)
-- [ ] Evolution triggers (level threshold, item use, friendship, era-specific conditions)
+- [ ] Evolution triggers (level threshold, item use, friendship, time-period conditions)
 - [ ] Evolution animation sequence
 - [ ] Held items (stat boosts, evolution stones, battle effects)
 
@@ -386,7 +386,7 @@ Infinite follows the *Like a Dragon* (Yakuza) approach: the open world is a hub 
 
 ## Milestone 8: Racing
 
-**Goal**: Vehicle-based racing as a full sub-game with era-themed tracks, vehicle customization, and leaderboards.
+**Goal**: Vehicle-based racing as a full sub-game with time-period themed tracks, vehicle customization, and leaderboards.
 
 ### 8.1 — Vehicle Physics
 
@@ -401,9 +401,9 @@ Infinite follows the *Like a Dragon* (Yakuza) approach: the open world is a hub 
 
 - [ ] Track definition format (spline path, width, surface type, decoration points)
 - [ ] Checkpoint system (must pass all checkpoints, lap counting)
-- [ ] Era-themed tracks:
-  - Past: horse/chariot race through medieval countryside
-  - Present: street racing through city, dirt rally
+- [ ] Time-period themed tracks:
+  - Ancient: horse/chariot race through countryside
+  - Modern: street racing through city, dirt rally
   - Future: hover-vehicle on anti-gravity tracks
 - [ ] Track hazards: obstacles, moving barriers, weather effects
 - [ ] Shortcuts and alternate routes
@@ -418,7 +418,7 @@ Infinite follows the *Like a Dragon* (Yakuza) approach: the open world is a hub 
 
 ### 8.4 — Vehicle Customization
 
-- [ ] Vehicle selection (era-appropriate vehicles)
+- [ ] Vehicle selection (time-period appropriate vehicles)
 - [ ] Stat tuning: top speed, acceleration, handling, drift
 - [ ] Visual customization: paint, decals
 - [ ] Upgrades purchased with currency or won as race rewards
@@ -437,7 +437,7 @@ Infinite follows the *Like a Dragon* (Yakuza) approach: the open world is a hub 
 
 ### 9.1 — Arcade Machine World Object
 
-- [ ] 3D arcade cabinet model placed in the world (era-appropriate styling)
+- [ ] 3D arcade cabinet model placed in the world (time-period appropriate styling)
 - [ ] Interact prompt when player is near
 - [ ] Camera transition: zoom into screen → full-screen sub-game
 - [ ] Exit via pause menu or game-over → camera pulls back to world
@@ -451,16 +451,16 @@ Infinite follows the *Like a Dragon* (Yakuza) approach: the open world is a hub 
 
 ### 9.3 — Example Arcade Games
 
-Each era has its own arcade lineup:
+Each time period has its own arcade lineup:
 
-- **Past era**: Simple games styled as ancient/medieval pastimes
+- **Ancient periods**: Simple games styled as historical pastimes
   - Tile-matching puzzle
   - Jousting timing game
-- **Present era**: Classic arcade homages
+- **Modern periods**: Classic arcade homages
   - Space shooter (vertical scrolling)
   - Racing top-down
   - Beat-em-up side-scroller
-- **Future era**: Abstract/experimental
+- **Future periods**: Abstract/experimental
   - Rhythm game
   - Procedural roguelike
   - Hacking puzzle
@@ -484,7 +484,7 @@ Each era has its own arcade lineup:
 - [ ] Minimap (chunk-based, shows nearby NPCs, interactables, sub-game locations)
 - [ ] Active quest tracker (objective text + waypoint)
 - [ ] Quick-use item slots (consumables, capture items)
-- [ ] Era indicator + time-of-day display
+- [ ] Year indicator + time-of-day display
 - [ ] Interaction prompt (context-sensitive: "Talk", "Open", "Climb", "Play")
 - [ ] Notification feed (XP gained, item received, quest update)
 
@@ -510,7 +510,7 @@ Each era has its own arcade lineup:
 
 ### 10.4 — UI Polish
 
-- [ ] Consistent art style across all menus (era-themed color palettes)
+- [ ] Consistent art style across all menus (time-period themed color palettes)
 - [ ] Transition animations between screens
 - [ ] Controller/gamepad support for all menus
 - [ ] Accessibility: text scaling, colorblind mode, control remapping
