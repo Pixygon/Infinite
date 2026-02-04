@@ -13,6 +13,19 @@ pub struct NpcSpawnPoint {
     pub data: NpcData,
     /// Only spawn in this year range (None = all years)
     pub year_range: Option<(i64, i64)>,
+    /// Index within this chunk's spawn list (for persistent key computation)
+    pub spawn_index: usize,
+}
+
+/// Compute a deterministic persistent key for an NPC based on chunk and spawn index.
+/// This key survives across sessions so relationships can persist.
+pub fn compute_persistent_key(cx: i32, cz: i32, spawn_index: usize) -> u64 {
+    let mut h = (cx as u64).wrapping_mul(73856093)
+        ^ (cz as u64).wrapping_mul(19349663)
+        ^ (spawn_index as u64).wrapping_mul(83492791);
+    h = h.wrapping_mul(0x517cc1b727220a95);
+    h ^= h >> 32;
+    h
 }
 
 /// Simple deterministic hash of a chunk coordinate to seed NPC placement
@@ -74,8 +87,10 @@ pub fn generate_spawn_points(cx: i32, cz: i32, chunk_size: f32) -> Vec<NpcSpawnP
                 wander_radius,
                 interaction_radius: 3.0,
                 color: role.color(),
+                server_character_id: None,
             },
             year_range,
+            spawn_index: i as usize,
         });
     }
 

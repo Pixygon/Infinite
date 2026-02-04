@@ -68,12 +68,17 @@ use winit::{
 use glam::{Mat4, Vec3};
 use infinite_core::{GameTime, Timeline, time::format_year};
 use infinite_game::{
-    CameraController, InputAction, InputHandler, Interactable, InteractionResult,
-    InteractionSystem, NpcId, PlayerController,
+    AiDialogueManager, CameraController, GameContext, InputAction, InputHandler,
+    Interactable, InteractionResult, InteractionSystem, NpcId, PlayerController,
+    RelationshipManager,
 };
+use infinite_game::npc::ai_dialogue::AiDialogueState;
+use infinite_game::npc::character_cache::CharacterCacheEntry;
 use infinite_game::npc::combat::PlayerCombatState;
 use infinite_game::npc::dialogue::DialogueSystem;
 use infinite_game::npc::manager::NpcManager;
+use infinite_game::npc::relationship::RelationshipMessage;
+use infinite_integration::IntegrationClient;
 use infinite_physics::PhysicsWorld;
 use infinite_render::{BasicPushConstants, Mesh, SkyMesh, SkyPushConstants, Vertex3D, SkyVertex};
 use infinite_world::{
@@ -201,10 +206,18 @@ struct InfiniteApp {
     interaction_system: InteractionSystem,
     /// NPC manager
     npc_manager: Option<NpcManager>,
-    /// Dialogue system
+    /// Dialogue system (static tree fallback)
     dialogue_system: DialogueSystem,
+    /// AI dialogue manager
+    ai_dialogue: AiDialogueManager,
+    /// NPC relationship manager
+    relationship_manager: RelationshipManager,
+    /// PixygonServer integration client
+    integration_client: Option<IntegrationClient>,
     /// Player combat state
     player_combat: PlayerCombatState,
+    /// Text input buffer for AI dialogue
+    ai_dialogue_input: String,
     /// Text overlay to show (from sign interactions)
     interaction_text: Option<String>,
     /// Timer for hiding interaction text
@@ -284,7 +297,11 @@ impl InfiniteApp {
             interaction_system: InteractionSystem::new(),
             npc_manager: None,
             dialogue_system: DialogueSystem::new(),
+            ai_dialogue: AiDialogueManager::new(),
+            relationship_manager: RelationshipManager::new(),
+            integration_client: IntegrationClient::new().ok(),
             player_combat: PlayerCombatState::new(),
+            ai_dialogue_input: String::new(),
             interaction_text: None,
             interaction_text_timer: 0.0,
             notification_text: None,
@@ -407,8 +424,10 @@ impl InfiniteApp {
 
         self.chunk_manager = Some(chunk_manager);
 
-        // Reset dialogue and combat state
+        // Reset dialogue, AI, and combat state
         self.dialogue_system = DialogueSystem::new();
+        self.ai_dialogue = AiDialogueManager::new();
+        self.ai_dialogue_input = String::new();
         self.player_combat = PlayerCombatState::new();
 
         // Create player - spawn above terrain
@@ -482,6 +501,8 @@ impl InfiniteApp {
         self.chunk_manager = None;
         self.npc_manager = None;
         self.dialogue_system.end_dialogue();
+        self.ai_dialogue.end_dialogue();
+        self.ai_dialogue_input.clear();
         self.interaction_system.clear();
         self.interaction_text = None;
         self.notification_text = None;
@@ -524,6 +545,7 @@ impl InfiniteApp {
             collected_items: self.collected_items.clone(),
             play_time_seconds: self.play_time,
             interactions: self.interaction_system.save_states(),
+            npc_relationships: self.relationship_manager.to_save_data(),
         }
     }
 
@@ -593,6 +615,9 @@ impl InfiniteApp {
 
         // Restore interaction states
         self.interaction_system.load_states(data.interactions);
+
+        // Restore NPC relationships
+        self.relationship_manager = RelationshipManager::from_save_data(&data.npc_relationships);
 
         // Reset climbing state
         self.climbing = false;
@@ -1087,8 +1112,16 @@ impl InfiniteApp {
                     self.interaction_system.update(player_pos, forward);
                 }
 
+                // Poll AI dialogue for responses
+                self.ai_dialogue.update();
+
+                // Poll NPC generator
+                if let Some(npc_manager) = &mut self.npc_manager {
+                    npc_manager.npc_generator.poll(&mut npc_manager.character_cache);
+                }
+
                 // Handle Interact input (E key)
-                if !self.dialogue_system.is_active() && self.input_handler.state.is_just_pressed(InputAction::Interact) {
+                if !self.dialogue_system.is_active() && !self.ai_dialogue.is_active() && self.input_handler.state.is_just_pressed(InputAction::Interact) {
                     if let Some(result) = self.interaction_system.interact() {
                         match result {
                             InteractionResult::ShowText(text) => {
@@ -1109,11 +1142,84 @@ impl InfiniteApp {
                                 self.notification_timer = 3.0;
                             }
                             InteractionResult::TalkToNpc(npc_id) => {
-                                if let Some(npc_manager) = &mut self.npc_manager {
+                                // Extract NPC data first to avoid borrow conflicts
+                                let npc_info = if let Some(npc_manager) = &mut self.npc_manager {
                                     if let Some(npc) = npc_manager.get_mut(npc_id) {
-                                        let npc_name = npc.name().to_string();
-                                        let role = npc.data.role;
+                                        let info = (
+                                            npc.name().to_string(),
+                                            npc.data.role,
+                                            npc.persistent_key,
+                                            npc.chunk,
+                                            npc.brain.as_ref()
+                                                .and_then(|b| b.current_action_name())
+                                                .unwrap_or("idle")
+                                                .to_string(),
+                                        );
                                         npc.state = infinite_game::npc::NpcBehaviorState::Talking;
+                                        Some(info)
+                                    } else {
+                                        None
+                                    }
+                                } else {
+                                    None
+                                };
+
+                                if let Some((npc_name, role, persistent_key, chunk, goap_state)) = npc_info {
+                                    // Try AI dialogue if integration client is available
+                                    let use_ai = if let Some(client) = &self.integration_client {
+                                        if let Some(npc_manager) = &mut self.npc_manager {
+                                            match npc_manager.character_cache.get(&persistent_key) {
+                                                Some(CharacterCacheEntry::Ready(character)) => {
+                                                    let player_name = self.current_character.as_ref()
+                                                        .map(|c| c.name.clone())
+                                                        .unwrap_or_else(|| "Traveler".to_string());
+                                                    let rel = self.relationship_manager.get(persistent_key);
+                                                    let (affection, tier_name, summary) = match rel {
+                                                        Some(r) => (r.affection, r.tier().name().to_string(), r.conversation_summary.clone()),
+                                                        None => (0.0, "Stranger".to_string(), None),
+                                                    };
+                                                    let character = character.clone();
+                                                    let context = GameContext {
+                                                        active_year: self.timeline.active_year,
+                                                        time_of_day: self.time_of_day.time_hours,
+                                                        weather: format!("{:?}", self.weather),
+                                                        player_name,
+                                                        npc_goap_state: goap_state,
+                                                        npc_location_desc: format!("chunk ({}, {})", chunk.x, chunk.z),
+                                                        relationship_level: affection,
+                                                        relationship_tier: tier_name,
+                                                        conversation_summary: summary,
+                                                    };
+                                                    self.ai_dialogue.start_dialogue(
+                                                        npc_id, persistent_key, npc_name.clone(),
+                                                        &character, context, client,
+                                                    );
+                                                    true
+                                                }
+                                                Some(CharacterCacheEntry::Pending) => {
+                                                    self.notification_text = Some("Connecting...".to_string());
+                                                    self.notification_timer = 1.5;
+                                                    false
+                                                }
+                                                Some(CharacterCacheEntry::Failed) | None => {
+                                                    if client.is_authenticated() {
+                                                        npc_manager.character_cache.set_pending(persistent_key);
+                                                        npc_manager.npc_generator.generate_for_npc(
+                                                            persistent_key, &npc_name, role,
+                                                            self.timeline.active_year, client,
+                                                        );
+                                                    }
+                                                    false
+                                                }
+                                            }
+                                        } else {
+                                            false
+                                        }
+                                    } else {
+                                        false
+                                    };
+
+                                    if !use_ai {
                                         self.dialogue_system.start_dialogue(npc_id, npc_name, role);
                                     }
                                 }
@@ -1557,8 +1663,159 @@ impl InfiniteApp {
                                         });
                                 }
 
-                                // --- Dialogue UI ---
-                                if self.dialogue_system.is_active() {
+                                // --- AI Dialogue UI ---
+                                if self.ai_dialogue.is_active() {
+                                    let mut should_close = false;
+                                    egui::Area::new(egui::Id::new("ai_dialogue_ui"))
+                                        .anchor(egui::Align2::CENTER_BOTTOM, [0.0, -40.0])
+                                        .show(&ctx, |ui| {
+                                            egui::Frame::new()
+                                                .fill(egui::Color32::from_rgba_unmultiplied(15, 15, 30, 240))
+                                                .corner_radius(10.0)
+                                                .inner_margin(16.0)
+                                                .show(ui, |ui| {
+                                                    ui.set_min_width(400.0);
+                                                    ui.set_max_width(550.0);
+
+                                                    // NPC name header
+                                                    if let Some(name) = self.ai_dialogue.active_npc_name() {
+                                                        ui.label(
+                                                            egui::RichText::new(name)
+                                                                .font(egui::FontId::proportional(14.0))
+                                                                .color(egui::Color32::from_rgb(180, 180, 200))
+                                                        );
+                                                        ui.separator();
+                                                    }
+
+                                                    match self.ai_dialogue.active_state() {
+                                                        Some(AiDialogueState::WaitingForInput { messages }) |
+                                                        Some(AiDialogueState::WaitingForResponse { messages, .. }) => {
+                                                            let is_waiting = matches!(
+                                                                self.ai_dialogue.active_state(),
+                                                                Some(AiDialogueState::WaitingForResponse { .. })
+                                                            );
+
+                                                            // Message history (scrollable)
+                                                            egui::ScrollArea::vertical()
+                                                                .max_height(250.0)
+                                                                .stick_to_bottom(true)
+                                                                .show(ui, |ui| {
+                                                                    for msg in messages {
+                                                                        let color = if msg.is_player {
+                                                                            egui::Color32::from_rgb(150, 200, 255)
+                                                                        } else {
+                                                                            egui::Color32::from_rgb(230, 230, 240)
+                                                                        };
+                                                                        ui.label(
+                                                                            egui::RichText::new(format!("{}: {}", msg.speaker, msg.text))
+                                                                                .font(egui::FontId::proportional(14.0))
+                                                                                .color(color)
+                                                                        );
+                                                                        ui.add_space(4.0);
+                                                                    }
+
+                                                                    if is_waiting {
+                                                                        ui.label(
+                                                                            egui::RichText::new("Thinking...")
+                                                                                .font(egui::FontId::proportional(14.0))
+                                                                                .color(egui::Color32::from_rgb(150, 150, 170))
+                                                                                .italics()
+                                                                        );
+                                                                    }
+                                                                });
+
+                                                            ui.add_space(8.0);
+
+                                                            if !is_waiting {
+                                                                // Quick response buttons
+                                                                ui.horizontal(|ui| {
+                                                                    let quick_responses = ["Hello", "Tell me about this place", "What year is it?", "Goodbye"];
+                                                                    for resp in &quick_responses {
+                                                                        if ui.button(
+                                                                            egui::RichText::new(*resp)
+                                                                                .font(egui::FontId::proportional(12.0))
+                                                                        ).clicked() {
+                                                                            if *resp == "Goodbye" {
+                                                                                should_close = true;
+                                                                            } else if let Some(client) = &self.integration_client {
+                                                                                self.ai_dialogue.send_player_message(
+                                                                                    resp.to_string(), client,
+                                                                                );
+                                                                            }
+                                                                        }
+                                                                    }
+                                                                });
+
+                                                                // Text input
+                                                                ui.horizontal(|ui| {
+                                                                    let response = ui.text_edit_singleline(&mut self.ai_dialogue_input);
+                                                                    let submit = (response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)))
+                                                                        || ui.button("Send").clicked();
+                                                                    if submit && !self.ai_dialogue_input.trim().is_empty() {
+                                                                        let text = self.ai_dialogue_input.trim().to_string();
+                                                                        self.ai_dialogue_input.clear();
+                                                                        if let Some(client) = &self.integration_client {
+                                                                            self.ai_dialogue.send_player_message(text, client);
+                                                                        }
+                                                                    }
+                                                                });
+                                                            }
+                                                        }
+                                                        Some(AiDialogueState::Error(msg)) => {
+                                                            ui.label(
+                                                                egui::RichText::new(format!("Error: {}", msg))
+                                                                    .font(egui::FontId::proportional(14.0))
+                                                                    .color(egui::Color32::from_rgb(255, 100, 100))
+                                                            );
+                                                            if ui.button("Close").clicked() {
+                                                                should_close = true;
+                                                            }
+                                                        }
+                                                        None => {
+                                                            should_close = true;
+                                                        }
+                                                    }
+                                                });
+                                        });
+
+                                    if should_close {
+                                        // Record relationship data before closing
+                                        if let Some(AiDialogueState::WaitingForInput { messages }) = self.ai_dialogue.active_state() {
+                                            if let Some(npc_id) = self.ai_dialogue.active_npc_id() {
+                                                let persistent_key = self.npc_manager.as_ref()
+                                                    .and_then(|m| m.get(npc_id))
+                                                    .map(|n| n.persistent_key);
+
+                                                if let Some(key) = persistent_key {
+                                                    let rel_messages: Vec<RelationshipMessage> = messages.iter()
+                                                        .map(|m| RelationshipMessage {
+                                                            speaker: m.speaker.clone(),
+                                                            text: m.text.clone(),
+                                                            is_player: m.is_player,
+                                                        })
+                                                        .collect();
+                                                    let rel = self.relationship_manager.get_or_create(key);
+                                                    rel.record_conversation(&rel_messages);
+                                                }
+                                            }
+                                        }
+
+                                        // Return NPC to non-talking state
+                                        if let Some(npc_id) = self.ai_dialogue.active_npc_id() {
+                                            if let Some(npc_manager) = &mut self.npc_manager {
+                                                if let Some(npc) = npc_manager.get_mut(npc_id) {
+                                                    npc.state = infinite_game::npc::NpcBehaviorState::Idle { timer: 2.0 };
+                                                }
+                                            }
+                                        }
+
+                                        self.ai_dialogue.end_dialogue();
+                                        self.ai_dialogue_input.clear();
+                                    }
+                                }
+
+                                // --- Static Dialogue UI (fallback) ---
+                                else if self.dialogue_system.is_active() {
                                     let should_close = {
                                         let mut close = false;
                                         egui::Area::new(egui::Id::new("dialogue_ui"))

@@ -15,4 +15,8 @@ pub use interaction::{
     InteractionSaveData, InteractionSystem,
 };
 pub use npc::{NpcFaction, NpcId, NpcRole};
+pub use npc::ai_dialogue::AiDialogueManager;
+pub use npc::character_cache::NpcCharacterCache;
+pub use npc::game_context::GameContext;
+pub use npc::relationship::{RelationshipManager, RelationshipSaveData};
 pub use player::{MovementConfig, PlayerController};

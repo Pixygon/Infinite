@@ -5,8 +5,10 @@ use std::collections::HashMap;
 use glam::Vec3;
 use infinite_world::ChunkCoord;
 
+use super::character_cache::NpcCharacterCache;
 use super::goap::NpcBrain;
-use super::spawn::{generate_spawn_points, NpcSpawnPoint};
+use super::npc_generator::NpcGenerator;
+use super::spawn::{compute_persistent_key, generate_spawn_points, NpcSpawnPoint};
 use super::{NpcBehaviorState, NpcFaction, NpcId, NpcInstance, NpcRole};
 use super::combat::CombatStats;
 
@@ -19,6 +21,10 @@ pub struct NpcManager {
     pub combat_stats: HashMap<NpcId, CombatStats>,
     /// Respawn timers: chunk coord → list of (spawn point index, timer remaining)
     respawn_timers: Vec<(ChunkCoord, usize, f32)>,
+    /// Cache of server characters keyed by persistent_key
+    pub character_cache: NpcCharacterCache,
+    /// Lazy NPC character generator
+    pub npc_generator: NpcGenerator,
 }
 
 impl NpcManager {
@@ -29,6 +35,8 @@ impl NpcManager {
             chunk_size,
             combat_stats: HashMap::new(),
             respawn_timers: Vec::new(),
+            character_cache: NpcCharacterCache::new(),
+            npc_generator: NpcGenerator::new(),
         }
     }
 
@@ -78,6 +86,8 @@ impl NpcManager {
 
         let is_enemy = data.role == NpcRole::Enemy;
 
+        let persistent_key = compute_persistent_key(coord.x, coord.z, point.spawn_index);
+
         let instance = NpcInstance {
             id,
             data,
@@ -87,6 +97,7 @@ impl NpcManager {
             chunk: coord,
             state: NpcBehaviorState::Idle { timer: 2.0 },
             brain: Some(brain),
+            persistent_key,
         };
 
         self.npcs.insert(id, instance);
@@ -100,15 +111,16 @@ impl NpcManager {
 
     /// Called when a chunk is unloaded. Removes all NPCs from that chunk.
     pub fn on_chunk_unloaded(&mut self, coord: ChunkCoord) {
-        let to_remove: Vec<NpcId> = self
+        let to_remove: Vec<(NpcId, u64)> = self
             .npcs
             .values()
             .filter(|npc| npc.chunk == coord)
-            .map(|npc| npc.id)
+            .map(|npc| (npc.id, npc.persistent_key))
             .collect();
-        for id in to_remove {
-            self.npcs.remove(&id);
-            self.combat_stats.remove(&id);
+        for (id, key) in &to_remove {
+            self.npcs.remove(id);
+            self.combat_stats.remove(id);
+            self.character_cache.clear_key(*key);
         }
     }
 

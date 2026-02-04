@@ -79,6 +79,8 @@ uuid = { version = "1", features = ["v4", "serde"] }
 parking_lot = "0.12"
 toml = "0.8"
 dirs = "5"
+reqwest = { version = "0.12", features = ["json", "rustls-tls"] }
+chrono = { version = "0.4", features = ["serde"] }
 
 [package]
 name = "infinite"
@@ -90,6 +92,7 @@ license.workspace = true
 [dependencies]
 infinite-core.workspace = true
 infinite-game.workspace = true
+infinite-integration.workspace = true
 infinite-physics.workspace = true
 infinite-render.workspace = true
 infinite-world.workspace = true

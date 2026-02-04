@@ -5,6 +5,7 @@
 
 use anyhow::{Context, Result};
 use infinite_game::InteractionSaveData;
+use infinite_game::RelationshipSaveData;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
@@ -32,6 +33,9 @@ pub struct SaveData {
     /// Interaction world state (doors, levers, etc.)
     #[serde(default)]
     pub interactions: InteractionSaveData,
+    /// NPC relationship data
+    #[serde(default)]
+    pub npc_relationships: RelationshipSaveData,
 }
 
 /// Saved player state
@@ -243,6 +247,7 @@ mod tests {
             collected_items: vec!["Gem".to_string()],
             play_time_seconds: 3661.0,
             interactions: InteractionSaveData::default(),
+            npc_relationships: RelationshipSaveData::default(),
         }
     }
 

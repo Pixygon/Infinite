@@ -1,9 +1,15 @@
 //! NPC system — data structures, manager, spawning, dialogue, and combat
 
+pub mod ai_dialogue;
+pub mod archetype_mapping;
+pub mod character_cache;
 pub mod combat;
 pub mod dialogue;
+pub mod game_context;
 pub mod goap;
 pub mod manager;
+pub mod npc_generator;
+pub mod relationship;
 pub mod spawn;
 
 use glam::Vec3;
@@ -64,6 +70,8 @@ pub struct NpcData {
     pub wander_radius: f32,
     pub interaction_radius: f32,
     pub color: [f32; 4],
+    /// Linked PixygonServer character ID (if any)
+    pub server_character_id: Option<String>,
 }
 
 /// Simple behavior state (used before GOAP takes over)
@@ -84,6 +92,8 @@ pub struct NpcInstance {
     pub chunk: infinite_world::ChunkCoord,
     pub state: NpcBehaviorState,
     pub brain: Option<goap::NpcBrain>,
+    /// Deterministic key for persistence (hash of chunk coords + spawn index)
+    pub persistent_key: u64,
 }
 
 impl NpcInstance {
