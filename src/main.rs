@@ -107,6 +107,18 @@ struct SkyMeshBuffers {
     index_count: u32,
 }
 
+/// Floating damage number for combat feedback
+struct DamageNumber {
+    /// World position of the damage number
+    position: Vec3,
+    /// Damage amount to display
+    amount: f32,
+    /// Whether this was a critical hit
+    is_crit: bool,
+    /// Remaining display time
+    timer: f32,
+}
+
 /// Vulkan rendering context
 struct RenderContext {
     device: Arc<Device>,
@@ -258,6 +270,14 @@ struct InfiniteApp {
     debug_wireframe: bool,
     /// Show collider shapes
     debug_colliders: bool,
+
+    // Combat UI
+    /// Floating damage numbers
+    damage_numbers: Vec<DamageNumber>,
+    /// Level-up notification (level, timer)
+    level_up_notification: Option<(u32, f32)>,
+    /// Stat growth for current archetype (cached)
+    archetype_growth: Option<infinite_game::player::stats::StatGrowth>,
 }
 
 impl InfiniteApp {
@@ -322,6 +342,10 @@ impl InfiniteApp {
             debug_visible: false,
             debug_wireframe: false,
             debug_colliders: false,
+
+            damage_numbers: Vec::new(),
+            level_up_notification: None,
+            archetype_growth: None,
         }
     }
 
@@ -428,7 +452,25 @@ impl InfiniteApp {
         self.dialogue_system = DialogueSystem::new();
         self.ai_dialogue = AiDialogueManager::new();
         self.ai_dialogue_input = String::new();
-        self.player_combat = PlayerCombatState::new();
+
+        // Initialize player combat stats from archetype
+        if let Some(character) = &self.current_character {
+            if let Some(archetype) = character.archetype {
+                let stats = archetype.base_stats();
+                self.player_combat = infinite_game::npc::combat::PlayerCombatState::from_stats(stats);
+                self.archetype_growth = Some(archetype.stat_growth());
+            } else {
+                self.player_combat = PlayerCombatState::new();
+                self.archetype_growth = None;
+            }
+        } else {
+            self.player_combat = PlayerCombatState::new();
+            self.archetype_growth = None;
+        }
+
+        // Reset combat UI
+        self.damage_numbers.clear();
+        self.level_up_notification = None;
 
         // Create player - spawn above terrain
         let mut player = PlayerController::new();
@@ -546,6 +588,12 @@ impl InfiniteApp {
             play_time_seconds: self.play_time,
             interactions: self.interaction_system.save_states(),
             npc_relationships: self.relationship_manager.to_save_data(),
+            player_stats: Some(self.player_combat.stats.clone()),
+            player_progression: Some(self.player_combat.progression.clone()),
+            equipment: Some(self.player_combat.equipment.clone()),
+            skill_slots: Some(self.player_combat.skill_slots.clone()),
+            known_runes: Some(self.player_combat.known_runes.clone()),
+            inventory: None,
         }
     }
 
@@ -618,6 +666,14 @@ impl InfiniteApp {
 
         // Restore NPC relationships
         self.relationship_manager = RelationshipManager::from_save_data(&data.npc_relationships);
+
+        // Restore player combat stats and progression
+        if let Some(stats) = data.player_stats {
+            self.player_combat.stats = stats;
+        }
+        if let Some(progression) = data.player_progression {
+            self.player_combat.progression = progression;
+        }
 
         // Reset climbing state
         self.climbing = false;
@@ -858,8 +914,9 @@ impl InfiniteApp {
                 }
             }
             ApplicationState::Playing => {
-                // Release cursor when debug overlay is open so user can interact with it
-                self.update_cursor_capture(!self.debug_visible);
+                // Release cursor when debug overlay or any dialogue is active
+                let dialogue_active = self.dialogue_system.is_active() || self.ai_dialogue.is_active();
+                self.update_cursor_capture(!self.debug_visible && !dialogue_active);
 
                 // Update world systems
                 self.time_of_day.update(delta);
@@ -973,6 +1030,11 @@ impl InfiniteApp {
                 let fixed_dt = self.game_time.config.fixed_timestep;
                 let steps = self.game_time.fixed_steps();
 
+                // Update query pipeline so character controller sees all colliders
+                if let Some(physics) = &mut self.physics_world {
+                    physics.update_query_pipeline();
+                }
+
                 for _ in 0..steps {
                     if let (Some(physics), Some(player), Some(camera)) =
                         (&mut self.physics_world, &mut self.player, &self.camera)
@@ -1082,8 +1144,8 @@ impl InfiniteApp {
                     }
 
                     // --- Enemy combat: enemies damage player ---
-                    // Collect attacking enemy IDs first (avoids borrow conflicts)
-                    let attacking_enemies: Vec<NpcId> = npc_manager.npcs_iter()
+                    // Collect attacking enemy IDs and positions first (avoids borrow conflicts)
+                    let attacking_enemies: Vec<(NpcId, Vec3)> = npc_manager.npcs_iter()
                         .filter(|n| n.data.role == infinite_game::NpcRole::Enemy)
                         .filter(|n| {
                             n.brain.as_ref()
@@ -1091,20 +1153,140 @@ impl InfiniteApp {
                                 .map(|name| name == "attack_melee")
                                 .unwrap_or(false)
                         })
-                        .map(|n| n.id)
+                        .map(|n| (n.id, n.position))
                         .collect();
-                    for npc_id in &attacking_enemies {
+
+                    for (npc_id, npc_pos) in &attacking_enemies {
                         if let Some(stats) = npc_manager.combat_stats.get_mut(npc_id) {
                             if stats.is_alive() && stats.update_attack(delta) {
-                                let dmg = stats.attack;
-                                self.player_combat.take_damage(dmg);
+                                // Check if player is in attack range
+                                let dist = (player_pos - *npc_pos).length();
+                                if dist < stats.attack_radius {
+                                    let dmg = stats.attack;
+                                    let actual_dmg = self.player_combat.take_damage(dmg);
+                                    if actual_dmg > 0.0 {
+                                        // Apply knockback
+                                        if let Some(player) = &mut self.player {
+                                            let knockback_dir = (player_pos - *npc_pos).normalize_or_zero();
+                                            player.character.apply_impulse(knockback_dir * 5.0);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // --- Player attack input ---
+                if let Some(camera) = &self.camera {
+                    if self.input_handler.state.is_just_pressed(InputAction::Attack) {
+                        if self.player_combat.try_attack() {
+                            // Find enemies in attack cone
+                            let attack_range = 2.5_f32;
+                            let attack_angle = 90.0_f32.to_radians();
+                            let player_forward = camera.forward();
+                            let player_forward_xz = Vec3::new(player_forward.x, 0.0, player_forward.z).normalize_or_zero();
+
+                            if let Some(npc_manager) = &mut self.npc_manager {
+                                // Collect enemies in range
+                                let enemies_in_range: Vec<(NpcId, Vec3, f32)> = npc_manager.npcs_iter()
+                                    .filter(|n| n.data.faction == infinite_game::NpcFaction::Hostile)
+                                    .filter_map(|n| {
+                                        let to_npc = n.position - player_pos;
+                                        let to_npc_xz = Vec3::new(to_npc.x, 0.0, to_npc.z);
+                                        let distance = to_npc_xz.length();
+                                        if distance < attack_range && distance > 0.01 {
+                                            let angle = player_forward_xz.dot(to_npc_xz.normalize());
+                                            if angle > (attack_angle / 2.0).cos() {
+                                                return Some((n.id, n.position, distance));
+                                            }
+                                        }
+                                        None
+                                    })
+                                    .collect();
+
+                                // Damage closest enemy in cone
+                                if let Some((npc_id, npc_pos, _)) = enemies_in_range.into_iter()
+                                    .min_by(|a, b| a.2.partial_cmp(&b.2).unwrap_or(std::cmp::Ordering::Equal))
+                                {
+                                    let npc_defense = npc_manager.combat_stats.get(&npc_id)
+                                        .map(|s| s.defense)
+                                        .unwrap_or(0.0);
+
+                                    let (damage, is_crit) = self.player_combat.calculate_damage(npc_defense);
+                                    let defeated = npc_manager.damage_npc(
+                                        npc_id,
+                                        damage,
+                                        infinite_game::combat::element::Element::Physical,
+                                        infinite_game::combat::damage::AttackType::Light,
+                                    );
+
+                                    // Add damage number
+                                    self.damage_numbers.push(DamageNumber {
+                                        position: npc_pos + Vec3::Y * 1.5,
+                                        amount: damage,
+                                        is_crit,
+                                        timer: 1.0,
+                                    });
+
+                                    if defeated {
+                                        // Grant XP
+                                        let npc_level = npc_manager.npc_level(npc_id);
+                                        let xp = infinite_game::player::stats::xp_for_enemy(
+                                            npc_level,
+                                            infinite_game::player::stats::EnemyType::Normal,
+                                        );
+                                        let levels_gained = self.player_combat.add_xp(xp);
+
+                                        // Handle level-ups
+                                        for new_level in levels_gained {
+                                            if let Some(growth) = &self.archetype_growth {
+                                                self.player_combat.apply_level_up(growth);
+                                            }
+                                            self.level_up_notification = Some((new_level, 3.0));
+                                        }
+
+                                        // Show XP notification
+                                        self.notification_text = Some(format!("+{} XP", xp));
+                                        self.notification_timer = 1.5;
+                                    }
+                                }
                             }
                         }
                     }
                 }
 
                 // --- Player combat update ---
-                self.player_combat.update(delta);
+                let _dot_damage = self.player_combat.update(delta);
+
+                // --- Player death/respawn ---
+                if !self.player_combat.is_alive() {
+                    self.player_combat.respawn();
+                    // Teleport to spawn point
+                    if let (Some(player), Some(physics), Some(chunk_manager)) =
+                        (&mut self.player, &mut self.physics_world, &self.chunk_manager)
+                    {
+                        let spawn_height = chunk_manager.height_at(0.0, 0.0);
+                        player.teleport(physics, Vec3::new(0.0, spawn_height + 2.0, 0.0));
+                    }
+                    self.notification_text = Some("You died!".to_string());
+                    self.notification_timer = 3.0;
+                }
+
+                // --- Update damage numbers ---
+                self.damage_numbers.retain_mut(|dn| {
+                    dn.timer -= delta;
+                    dn.position.y += delta * 2.0; // Float upward
+                    dn.timer > 0.0
+                });
+
+                // --- Update level-up notification ---
+                if let Some((_, timer)) = &mut self.level_up_notification {
+                    *timer -= delta;
+                    if *timer <= 0.0 {
+                        self.level_up_notification = None;
+                    }
+                }
 
                 // --- Interaction system ---
                 if let Some(camera) = &self.camera {
@@ -1466,19 +1648,22 @@ impl InfiniteApp {
                                 StateTransition::None
                             }
                             ApplicationState::Playing => {
-                                // Player stats (placeholder values for now)
-                                let hp = 85.0f32;
-                                let max_hp = 100.0f32;
-                                let mana = 60.0f32;
+                                // Player stats from combat system
+                                let hp = self.player_combat.current_hp();
+                                let max_hp = self.player_combat.max_hp();
+                                let mana = 60.0f32; // Mana system not yet implemented
                                 let max_mana = 100.0f32;
-                                let level = 1u32;
+                                let level = self.player_combat.level();
+                                let xp_fraction = self.player_combat.xp_fraction();
+                                let current_xp = self.player_combat.current_xp();
+                                let xp_to_next = self.player_combat.xp_to_next_level();
 
                                 // Get time and weather info
                                 let time_str = self.time_of_day.formatted_time();
                                 let period = self.time_of_day.period_name();
                                 let weather_name = self.weather.current.name();
 
-                                // Top-left: HP, Level, Mana
+                                // Top-left: HP, Level, Mana, XP
                                 egui::Area::new(egui::Id::new("player_stats"))
                                     .fixed_pos([10.0, 10.0])
                                     .show(&ctx, |ui| {
@@ -1550,6 +1735,34 @@ impl InfiniteApp {
                                                     egui::vec2(160.0 * (mana / max_mana), 12.0)
                                                 );
                                                 ui.painter().rect_filled(mana_fill, 3.0, egui::Color32::from_rgb(50, 100, 200));
+                                                ui.allocate_space(egui::vec2(160.0, 12.0));
+
+                                                ui.add_space(6.0);
+
+                                                // XP Bar
+                                                ui.horizontal(|ui| {
+                                                    ui.label(
+                                                        egui::RichText::new("XP")
+                                                            .font(egui::FontId::proportional(12.0))
+                                                            .color(egui::Color32::from_rgb(150, 100, 200))
+                                                    );
+                                                    ui.label(
+                                                        egui::RichText::new(format!("{}/{}", current_xp, xp_to_next))
+                                                            .font(egui::FontId::proportional(12.0))
+                                                            .color(egui::Color32::from_rgb(180, 180, 180))
+                                                    );
+                                                });
+                                                let xp_rect = ui.available_rect_before_wrap();
+                                                let xp_bar_rect = egui::Rect::from_min_size(
+                                                    xp_rect.min,
+                                                    egui::vec2(160.0, 12.0)
+                                                );
+                                                ui.painter().rect_filled(xp_bar_rect, 3.0, egui::Color32::from_rgb(30, 20, 50));
+                                                let xp_fill = egui::Rect::from_min_size(
+                                                    xp_bar_rect.min,
+                                                    egui::vec2(160.0 * xp_fraction, 12.0)
+                                                );
+                                                ui.painter().rect_filled(xp_fill, 3.0, egui::Color32::from_rgb(100, 50, 200));
                                                 ui.allocate_space(egui::vec2(160.0, 12.0));
                                             });
                                     });
@@ -1871,8 +2084,8 @@ impl InfiniteApp {
                                     }
                                 }
 
-                                // --- Player Health Bar ---
-                                if self.player_combat.current_hp < self.player_combat.max_hp {
+                                // --- Player Health Bar (compact, shows when damaged) ---
+                                if self.player_combat.current_hp() < self.player_combat.max_hp() {
                                     egui::Area::new(egui::Id::new("player_health"))
                                         .anchor(egui::Align2::LEFT_BOTTOM, [10.0, -10.0])
                                         .show(&ctx, |ui| {
@@ -1886,9 +2099,114 @@ impl InfiniteApp {
                                                         .color(egui::Color32::WHITE));
                                                     let hp_frac = self.player_combat.hp_fraction();
                                                     let bar = egui::ProgressBar::new(hp_frac)
-                                                        .text(format!("{:.0}/{:.0}", self.player_combat.current_hp, self.player_combat.max_hp));
+                                                        .text(format!("{:.0}/{:.0}", self.player_combat.current_hp(), self.player_combat.max_hp()));
                                                     ui.add_sized([150.0, 16.0], bar);
                                                 });
+                                        });
+                                }
+
+                                // --- Enemy Health Bars (floating above hostile NPCs) ---
+                                if let (Some(npc_manager), Some(camera)) = (&self.npc_manager, &self.camera) {
+                                    let screen_size = ctx.screen_rect().size();
+                                    let aspect_ratio = screen_size.x / screen_size.y;
+                                    let view_matrix = camera.view_matrix();
+                                    let mut projection_matrix = camera.projection_matrix(aspect_ratio, 60.0);
+                                    projection_matrix.y_axis.y *= -1.0;
+                                    let view_proj = projection_matrix * view_matrix;
+
+                                    for npc in npc_manager.npcs_iter() {
+                                        if npc.data.faction != infinite_game::NpcFaction::Hostile {
+                                            continue;
+                                        }
+                                        if let Some(stats) = npc_manager.combat_stats.get(&npc.id) {
+                                            // Only show HP bar if damaged
+                                            if stats.current_hp < stats.max_hp {
+                                                let world_pos = npc.position + Vec3::Y * 2.0;
+                                                if let Some(screen_pos) = world_to_screen(world_pos, view_proj, screen_size) {
+                                                    let hp_frac = stats.hp_fraction();
+                                                    let bar_width = 60.0_f32;
+                                                    let bar_height = 8.0_f32;
+
+                                                    egui::Area::new(egui::Id::new(("enemy_hp", npc.id.0)))
+                                                        .fixed_pos([screen_pos.x - bar_width / 2.0, screen_pos.y])
+                                                        .show(&ctx, |ui| {
+                                                            let bg_rect = egui::Rect::from_min_size(
+                                                                ui.cursor().min,
+                                                                egui::vec2(bar_width, bar_height)
+                                                            );
+                                                            ui.painter().rect_filled(bg_rect, 2.0, egui::Color32::from_rgb(40, 40, 40));
+                                                            let hp_rect = egui::Rect::from_min_size(
+                                                                bg_rect.min,
+                                                                egui::vec2(bar_width * hp_frac, bar_height)
+                                                            );
+                                                            ui.painter().rect_filled(hp_rect, 2.0, egui::Color32::from_rgb(200, 50, 50));
+                                                            ui.allocate_space(egui::vec2(bar_width, bar_height));
+                                                        });
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+
+                                // --- Damage Numbers (floating combat text) ---
+                                if let Some(camera) = &self.camera {
+                                    let screen_size = ctx.screen_rect().size();
+                                    let aspect_ratio = screen_size.x / screen_size.y;
+                                    let view_matrix = camera.view_matrix();
+                                    let mut projection_matrix = camera.projection_matrix(aspect_ratio, 60.0);
+                                    projection_matrix.y_axis.y *= -1.0;
+                                    let view_proj = projection_matrix * view_matrix;
+
+                                    for (i, dn) in self.damage_numbers.iter().enumerate() {
+                                        if let Some(screen_pos) = world_to_screen(dn.position, view_proj, screen_size) {
+                                            let alpha = (dn.timer * 255.0) as u8;
+                                            let color = if dn.is_crit {
+                                                egui::Color32::from_rgba_unmultiplied(255, 215, 0, alpha) // Gold for crits
+                                            } else {
+                                                egui::Color32::from_rgba_unmultiplied(255, 255, 255, alpha) // White for normal
+                                            };
+                                            let text = if dn.is_crit {
+                                                format!("{:.0}!", dn.amount)
+                                            } else {
+                                                format!("{:.0}", dn.amount)
+                                            };
+                                            let font_size = if dn.is_crit { 20.0 } else { 16.0 };
+
+                                            egui::Area::new(egui::Id::new(("dmg_num", i)))
+                                                .fixed_pos([screen_pos.x - 20.0, screen_pos.y - 10.0])
+                                                .order(egui::Order::Foreground)
+                                                .show(&ctx, |ui| {
+                                                    ui.label(
+                                                        egui::RichText::new(text)
+                                                            .font(egui::FontId::proportional(font_size))
+                                                            .color(color)
+                                                            .strong()
+                                                    );
+                                                });
+                                        }
+                                    }
+                                }
+
+                                // --- Level Up Notification ---
+                                if let Some((new_level, timer)) = &self.level_up_notification {
+                                    let alpha = ((*timer / 3.0) * 255.0).min(255.0) as u8;
+                                    egui::Area::new(egui::Id::new("level_up"))
+                                        .anchor(egui::Align2::CENTER_CENTER, [0.0, -100.0])
+                                        .order(egui::Order::Foreground)
+                                        .show(&ctx, |ui| {
+                                            ui.vertical_centered(|ui| {
+                                                ui.label(
+                                                    egui::RichText::new("LEVEL UP!")
+                                                        .font(egui::FontId::proportional(36.0))
+                                                        .color(egui::Color32::from_rgba_unmultiplied(255, 215, 0, alpha))
+                                                        .strong()
+                                                );
+                                                ui.label(
+                                                    egui::RichText::new(format!("Level {}", new_level))
+                                                        .font(egui::FontId::proportional(24.0))
+                                                        .color(egui::Color32::from_rgba_unmultiplied(255, 255, 200, alpha))
+                                                );
+                                            });
                                         });
                                 }
 
@@ -1998,7 +2316,8 @@ impl InfiniteApp {
                                                 ui.label(format!("Hostile: {}", npc_mgr.count_by_faction(infinite_game::NpcFaction::Hostile)));
                                                 ui.label(format!("Neutral: {}", npc_mgr.count_by_faction(infinite_game::NpcFaction::Neutral)));
                                             }
-                                            ui.label(format!("Player HP: {:.0}/{:.0}", self.player_combat.current_hp, self.player_combat.max_hp));
+                                            ui.label(format!("Player HP: {:.0}/{:.0}", self.player_combat.current_hp(), self.player_combat.max_hp()));
+                                            ui.label(format!("Player Level: {} (XP: {}/{})", self.player_combat.level(), self.player_combat.current_xp(), self.player_combat.xp_to_next_level()));
 
                                             // Time travel debug buttons
                                             ui.separator();
@@ -3270,6 +3589,31 @@ fn create_sky_pipeline(
         },
     )
     .ok()
+}
+
+/// Project a world position to screen coordinates
+/// Returns None if the point is behind the camera
+fn world_to_screen(world_pos: Vec3, view_proj: Mat4, screen_size: egui::Vec2) -> Option<egui::Pos2> {
+    let clip = view_proj * world_pos.extend(1.0);
+
+    // Check if behind camera
+    if clip.w <= 0.0 {
+        return None;
+    }
+
+    // Perspective divide
+    let ndc = glam::Vec3::new(clip.x / clip.w, clip.y / clip.w, clip.z / clip.w);
+
+    // Check if outside frustum
+    if ndc.x < -1.0 || ndc.x > 1.0 || ndc.y < -1.0 || ndc.y > 1.0 {
+        return None;
+    }
+
+    // Convert NDC to screen coordinates
+    let screen_x = (ndc.x + 1.0) * 0.5 * screen_size.x;
+    let screen_y = (1.0 - ndc.y) * 0.5 * screen_size.y; // Y is flipped
+
+    Some(egui::Pos2::new(screen_x, screen_y))
 }
 
 /// Get tint color for time transitions based on how far from the present

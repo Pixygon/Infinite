@@ -18,3 +18,4 @@ serde_json.workspace = true
 glam.workspace = true
 winit.workspace = true
 tracing.workspace = true
+rand.workspace = true

@@ -1,9 +1,14 @@
 //! Save/load system with named save slots, quicksave, and auto-save
 //!
 //! Persists player position, rotation, active year, time of day, collected items,
-//! and interaction states to JSON files.
+//! interaction states, and player combat stats to JSON files.
 
 use anyhow::{Context, Result};
+use infinite_game::combat::equipment::EquipmentSet;
+use infinite_game::combat::item::Item;
+use infinite_game::combat::rune::Rune;
+use infinite_game::combat::skill::SkillSlot;
+use infinite_game::player::stats::{CharacterStats, PlayerProgression};
 use infinite_game::InteractionSaveData;
 use infinite_game::RelationshipSaveData;
 use serde::{Deserialize, Serialize};
@@ -36,6 +41,24 @@ pub struct SaveData {
     /// NPC relationship data
     #[serde(default)]
     pub npc_relationships: RelationshipSaveData,
+    /// Player combat stats (HP, attack, defense, etc.)
+    #[serde(default)]
+    pub player_stats: Option<CharacterStats>,
+    /// Player level and XP progression
+    #[serde(default)]
+    pub player_progression: Option<PlayerProgression>,
+    /// Player equipment
+    #[serde(default)]
+    pub equipment: Option<EquipmentSet>,
+    /// Player skill slots
+    #[serde(default)]
+    pub skill_slots: Option<Vec<SkillSlot>>,
+    /// Player known runes
+    #[serde(default)]
+    pub known_runes: Option<Vec<Rune>>,
+    /// Player inventory
+    #[serde(default)]
+    pub inventory: Option<Vec<Item>>,
 }
 
 /// Saved player state
@@ -248,6 +271,12 @@ mod tests {
             play_time_seconds: 3661.0,
             interactions: InteractionSaveData::default(),
             npc_relationships: RelationshipSaveData::default(),
+            player_stats: Some(CharacterStats::default()),
+            player_progression: Some(PlayerProgression::default()),
+            equipment: None,
+            skill_slots: None,
+            known_runes: None,
+            inventory: None,
         }
     }
 

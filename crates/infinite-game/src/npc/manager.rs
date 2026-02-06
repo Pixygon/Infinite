@@ -11,6 +11,21 @@ use super::npc_generator::NpcGenerator;
 use super::spawn::{compute_persistent_key, generate_spawn_points, NpcSpawnPoint};
 use super::{NpcBehaviorState, NpcFaction, NpcId, NpcInstance, NpcRole};
 use super::combat::CombatStats;
+use crate::combat::damage::AttackType;
+use crate::combat::element::Element;
+
+/// Pending damage event from an NPC to the player
+#[derive(Debug, Clone)]
+pub struct PendingPlayerDamage {
+    /// Damage amount
+    pub damage: f32,
+    /// Position of the attacker (for knockback direction)
+    pub attacker_pos: glam::Vec3,
+    /// ID of the attacker
+    pub attacker_id: NpcId,
+    /// Element of the attack
+    pub element: Element,
+}
 
 /// Manages all active NPC instances
 pub struct NpcManager {
@@ -25,6 +40,10 @@ pub struct NpcManager {
     pub character_cache: NpcCharacterCache,
     /// Lazy NPC character generator
     pub npc_generator: NpcGenerator,
+    /// Pending damage to deal to the player (set during NPC update, consumed by main loop)
+    pending_player_damage: Vec<PendingPlayerDamage>,
+    /// Track which NPCs have landed their attack this frame (to prevent double-hits)
+    attack_landed: std::collections::HashSet<NpcId>,
 }
 
 impl NpcManager {
@@ -37,6 +56,8 @@ impl NpcManager {
             respawn_timers: Vec::new(),
             character_cache: NpcCharacterCache::new(),
             npc_generator: NpcGenerator::new(),
+            pending_player_damage: Vec::new(),
+            attack_landed: std::collections::HashSet::new(),
         }
     }
 
@@ -402,7 +423,7 @@ impl NpcManager {
     }
 
     /// Damage an NPC. Returns true if the NPC was defeated (HP <= 0).
-    pub fn damage_npc(&mut self, id: NpcId, damage: f32) -> bool {
+    pub fn damage_npc(&mut self, id: NpcId, damage: f32, _element: Element, _attack_type: AttackType) -> bool {
         if let Some(stats) = self.combat_stats.get_mut(&id) {
             let actual = (damage - stats.defense).max(1.0);
             stats.current_hp = (stats.current_hp - actual).max(0.0);
@@ -435,6 +456,43 @@ impl NpcManager {
     /// Get combat stats for an NPC
     pub fn get_combat_stats(&self, id: NpcId) -> Option<&CombatStats> {
         self.combat_stats.get(&id)
+    }
+
+    /// Add pending damage to the player
+    pub fn add_pending_player_damage(&mut self, damage: f32, attacker_pos: Vec3, attacker_id: NpcId, element: Element) {
+        self.pending_player_damage.push(PendingPlayerDamage {
+            damage,
+            attacker_pos,
+            attacker_id,
+            element,
+        });
+    }
+
+    /// Take all pending damage events (drains the list)
+    pub fn take_pending_player_damage(&mut self) -> Vec<PendingPlayerDamage> {
+        std::mem::take(&mut self.pending_player_damage)
+    }
+
+    /// Check if an NPC has already landed their attack this update cycle
+    pub fn has_attack_landed(&self, id: NpcId) -> bool {
+        self.attack_landed.contains(&id)
+    }
+
+    /// Mark an NPC as having landed their attack
+    pub fn mark_attack_landed(&mut self, id: NpcId) {
+        self.attack_landed.insert(id);
+    }
+
+    /// Clear attack landed tracking (call at start of update)
+    pub fn clear_attack_landed(&mut self) {
+        self.attack_landed.clear();
+    }
+
+    /// Get the NPC level (for XP calculations)
+    pub fn npc_level(&self, _id: NpcId) -> u32 {
+        // For now, all NPCs are level 1. In the future, this could be based on
+        // distance from spawn, year, or other factors
+        1
     }
 }
 

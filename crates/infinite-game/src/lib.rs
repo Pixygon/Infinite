@@ -3,6 +3,7 @@
 //! Provides player controllers, camera, input handling, and game logic.
 
 pub mod camera;
+pub mod combat;
 pub mod input;
 pub mod interaction;
 pub mod npc;
@@ -19,4 +20,11 @@ pub use npc::ai_dialogue::AiDialogueManager;
 pub use npc::character_cache::NpcCharacterCache;
 pub use npc::game_context::GameContext;
 pub use npc::relationship::{RelationshipManager, RelationshipSaveData};
-pub use player::{MovementConfig, PlayerController};
+pub use player::{CharacterStats, EnemyType, MovementConfig, PlayerController, PlayerProgression, StatGrowth};
+
+// Combat system re-exports
+pub use combat::{
+    AttackType, DamageEvent, Element, EquipmentSet, EquipmentSlot, Gem, GemQuality, GemShape,
+    Item, ItemCategory, ItemId, ItemRarity, Rune, RuneComposer, Skill, SkillId, SkillSlot,
+    StatModifiers, StatusEffect, StatusEffectType, StatusManager, WeaponData, WeaponType,
+};

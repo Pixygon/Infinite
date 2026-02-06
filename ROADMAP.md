@@ -24,21 +24,23 @@ A Vulkan-based game engine in Rust powering **Infinite** — a game where player
 | Settings persistence (TOML) | `src/settings.rs` | Done |
 | Character persistence (JSON) | `src/character/persistence.rs` | Done |
 | Application state machine | `src/state.rs` | Done |
-
 | ECS (generational entities, sparse-set, queries, systems) | `infinite-ecs` | Done |
 | Audio engine (kira, music crossfade, SFX, spatial) | `infinite-audio` | Done |
 | Asset loading (glTF 2.0, textures, caching, dedup) | `infinite-assets` | Done |
+| NPC spawning, persistent identity, chunk lifecycle | `infinite-game/npc` | Done |
+| NPC AI dialogue with PixygonServer | `infinite-game/npc` | Done |
+| NPC relationship tracking & memory | `infinite-game/npc` | Done |
+| PixygonServer integration client | `infinite-integration` | Done |
 
 ### Stub Crates (need implementation)
 
 | Crate | Purpose | Dependencies Available |
 |-------|---------|----------------------|
 | `infinite-net` | Multiplayer networking | tokio, tokio-tungstenite |
-| `infinite-integration` | PixygonServer API client | tokio, serde |
 
 ---
 
-## Milestone 1: Engine Core
+## Milestone 1: Engine Core ✅
 
 **Goal**: Fill in the stub crates so every system has a working foundation.
 
@@ -106,7 +108,7 @@ A Vulkan-based game engine in Rust powering **Infinite** — a game where player
 
 **Goal**: The player can walk through a streaming world, enter buildings, climb ladders, flip switches, and travel between time periods.
 
-### 2.1 — Chunk Streaming
+### 2.1 — Chunk Streaming ✅
 
 - [x] Chunk grid system (define chunk size, e.g., 64×64 meters)
 - [x] Load/unload chunks based on player distance (ring buffer pattern)
@@ -115,7 +117,7 @@ A Vulkan-based game engine in Rust powering **Infinite** — a game where player
 - [ ] Background thread loading with `tokio::spawn_blocking`
 - [ ] LOD terrain for distant chunks (reduced subdivision)
 
-### 2.2 — Time Travel Transitions
+### 2.2 — Time Travel Transitions ✅
 
 - [x] Per-chunk time-period variants (terrain changes based on year)
 - [x] Transition trigger zones (time portals, story events, items)
@@ -134,34 +136,89 @@ Interactable objects the player can engage with via the `Interact` input action:
 - [x] **Buttons**: Single-press triggers (elevators, traps, puzzles)
 - [ ] **Pickups**: Items on the ground, collect into inventory on interact
 - [x] **Signs/Readables**: Display text overlay when examined
-- [x] **NPCs**: Initiate dialogue on interact (see Milestone 3)
+- [x] **NPCs**: Initiate dialogue on interact
 - [x] **Containers**: Chests, crates — open to reveal loot
 - [ ] **Sit points**: Benches, chairs — play sit animation, optional rest mechanic
 - [ ] **Vehicles**: Mount/dismount (ties into racing sub-game)
-- [ ] **Arcade machines**: Enter sub-game on interact (see Milestone 9)
+- [ ] **Arcade machines**: Enter sub-game on interact
 
-### 2.4 — Save/Load System
+### 2.4 — Save/Load System ✅
 
 - [x] Local save serialization (serde → JSON or bincode)
 - [x] Save slot UI (create, load, delete, auto-save indicator)
 - [x] Save captures: player position, active year, inventory, quest state, monster party, time-of-day
 - [x] Auto-save on time-period transition, entering buildings, and timed interval
+- [x] NPC relationship persistence
 - [ ] Cloud sync via PixygonServer `/api/v1/savedata` (merge local + remote by timestamp)
 
 ---
 
-## Milestone 3: NPCs & AI
+## Milestone 3: NPC Foundation & AI Dialogue ✅
 
-**Goal**: The world has friendly and hostile NPCs with believable behavior and conversational dialogue.
+**Goal**: NPCs exist in the world with persistent identity, AI-powered conversations, and relationship tracking.
 
-### 3.1 — NPC Foundation
+### 3.1 — NPC Foundation ✅
 
 - [x] `NpcData` struct: ID, name, species, faction, schedule, home position, role
 - [x] NPC spawning per chunk (spawn point data in chunk definition)
-- [ ] NPC visual representation (animated mesh, nametag, faction indicator)
+- [x] Persistent NPC identity (`persistent_key` from chunk coords + spawn index)
 - [x] NPC despawn when chunk unloads, persist state changes
+- [ ] NPC visual representation (animated mesh, nametag, faction indicator)
 
-### 3.2 — GOAP (Goal Oriented Action Planning)
+### 3.2 — PixygonServer Integration ✅
+
+Integration client for server communication (non-blocking, async via channels):
+
+- [x] `IntegrationClient` facade with tokio runtime
+- [x] `PendingRequest<T>` pattern for non-blocking async operations
+- [x] JWT authentication flow (login, token storage, refresh)
+- [x] Character API (list, get, create, update characters)
+- [x] AI Chat API (`POST /v1/ai/chat` — no auth required)
+- [x] Error handling (Network, AuthFailed, ServerError, Offline, Timeout)
+- [ ] Connection state monitoring and auto-reconnect
+- [ ] Request retry with exponential backoff
+
+### 3.3 — AI-Powered Dialogue ✅
+
+- [x] `AiDialogueManager` for conversation state management
+- [x] `GameContext` injection (year, time, weather, GOAP state, location, relationship)
+- [x] AI dialogue UI with scrollable message history
+- [x] Quick response buttons + text input field
+- [x] "Thinking..." indicator while waiting for AI response
+- [x] Conversation history per NPC (keyed by `persistent_key`)
+- [x] Offline fallback to static dialogue trees
+- [ ] Response parsing: extract mood changes, offered items/quests
+- [ ] Typing animation effect
+- [ ] Character portrait display
+
+### 3.4 — NPC Relationships ✅
+
+- [x] `NpcRelationship` struct: affection (0-100), times_spoken, message history
+- [x] `RelationshipTier` enum: Stranger → Acquaintance → Friend → CloseFriend → Trusted → Bonded
+- [x] Affection gains per conversation (+2 base, +1 per message, cap +5)
+- [x] Message condensation (summarize when >30 messages)
+- [x] `RelationshipManager` with save/load support
+- [x] Relationship context injected into AI prompts
+- [ ] Relationship-gated dialogue options
+- [ ] Gift giving system (increase affection)
+- [ ] Negative affection events (insults, theft, combat)
+
+### 3.5 — NPC Character Generation ✅
+
+- [x] Era-based archetype mapping (medieval/modern/future based on year)
+- [x] `generate_system_prompt()` creates personality from role + era
+- [x] `NpcGenerator` for lazy character creation on first interaction
+- [x] Character cache with Pending/Ready/Failed states
+- [ ] Character visual generation (appearance from server data)
+- [ ] Voice style selection based on archetype
+
+---
+
+## Milestone 4: GOAP AI & Enemy NPCs
+
+**Goal**: NPCs have believable autonomous behavior, and hostile NPCs provide combat encounters.
+
+### 4.1 — GOAP (Goal Oriented Action Planning)
 
 Behavior system for NPC autonomy:
 
@@ -177,22 +234,9 @@ Behavior system for NPC autonomy:
 - Guard: `patrol` → (sees enemy) → `alert_allies` → `engage_combat` → `return_to_post`
 - Villager: `wake_up` → `eat` → `go_to_work` → `work` → `eat` → `socialize` → `go_home` → `sleep`
 
-### 3.3 — NPC Dialogue (BimboChat Integration)
+### 4.2 — Enemy NPCs
 
-Dialogue uses generated AI characters from PixygonServer's Character system:
-
-- [ ] **Dialogue UI**: Text box with character portrait, name, typing animation
-- [ ] **Character binding**: Each NPC links to a PixygonServer Character (personality, backstory, style)
-- [ ] **Dialogue flow**: Player approaches → interact → send context to AI → stream response
-- [ ] **Context injection**: NPC's current GOAP state, location, time of day, active year, relationship level
-- [ ] **Response parsing**: Extract dialogue text, mood/expression changes, offered items/quests
-- [ ] **Conversation history**: Cache recent exchanges per NPC (store in save data)
-- [ ] **Offline fallback**: Pre-written dialogue trees for when AI is unavailable
-- [ ] **PixygonServer endpoints used**:
-  - `GET /api/v1/characters/:projectId/:userId/:characterId` — fetch NPC character data
-  - AI services endpoint — generate dialogue responses with character personality
-
-### 3.4 — Enemy NPCs
+*Requires: GOAP system, Combat system (Milestone 5)*
 
 - [ ] Enemy NPC type with aggro radius, patrol path, combat stats
 - [ ] GOAP goals for enemies: `patrol`, `chase_player`, `attack`, `flee_when_low_hp`, `call_reinforcements`
@@ -202,11 +246,11 @@ Dialogue uses generated AI characters from PixygonServer's Character system:
 
 ---
 
-## Milestone 4: Combat & Stats
+## Milestone 5: Player Stats & Combat
 
 **Goal**: Real-time combat with RPG stats, levelling, and damage calculation.
 
-### 4.1 — Player Stats
+### 5.1 — Player Stats
 
 - [ ] `CharacterStats` struct: HP, Attack, Defense, Speed, Special Attack, Special Defense
 - [ ] Base stats from archetype selection (Chronomancer, TemporalHunter, Vanguard, Technomage, ParadoxWeaver)
@@ -214,7 +258,7 @@ Dialogue uses generated AI characters from PixygonServer's Character system:
 - [ ] Stat growth per level (base + per-level scaling per archetype)
 - [ ] Derived stats: max HP, damage reduction %, crit chance, dodge chance
 
-### 4.2 — Combat System
+### 5.2 — Combat System
 
 - [ ] **Attack input**: Melee (light/heavy), ranged (if weapon equipped)
 - [ ] **Hit detection**: Physics-based (rapier3d collider overlap or raycast)
@@ -225,7 +269,7 @@ Dialogue uses generated AI characters from PixygonServer's Character system:
 - [ ] **Health bar UI**: Player HUD + floating enemy health bars
 - [ ] **Death/respawn**: Player respawns at last save point, lose some currency
 
-### 4.3 — Abilities & Moves
+### 5.3 — Abilities & Moves
 
 - [ ] Ability loadout (equip up to 4 active abilities)
 - [ ] Ability types: melee, ranged, AoE, buff, debuff, heal
@@ -233,7 +277,7 @@ Dialogue uses generated AI characters from PixygonServer's Character system:
 - [ ] Mana/energy resource for ability usage
 - [ ] Time-period themed abilities (ancient: melee/magic, modern: tech/gadgets, future: energy/psychic)
 
-### 4.4 — Levelling & Progression
+### 5.4 — Levelling & Progression
 
 - [ ] XP gain from combat, quests, exploration, sub-game completion
 - [ ] Level-up notification UI with stat increase display
@@ -243,11 +287,11 @@ Dialogue uses generated AI characters from PixygonServer's Character system:
 
 ---
 
-## Milestone 5: Inventory & Economy
+## Milestone 6: Inventory & Equipment
 
-**Goal**: Players collect, equip, buy, sell, and craft items.
+**Goal**: Players collect and equip items that affect their stats.
 
-### 5.1 — Inventory System
+### 6.1 — Inventory System
 
 - [ ] `Inventory` struct: list of `(ItemId, quantity)` with max capacity
 - [ ] Item data from PixygonServer CharacterItem catalog
@@ -257,7 +301,7 @@ Dialogue uses generated AI characters from PixygonServer's Character system:
 - [ ] Stack limits per item type
 - [ ] Drop/destroy items
 
-### 5.2 — Equipment
+### 6.2 — Equipment
 
 - [ ] Equipment slots: head, chest, legs, feet, main hand, off hand, accessory (×2), ring (×2)
 - [ ] Equipment stat bonuses applied to `CharacterStats`
@@ -266,24 +310,7 @@ Dialogue uses generated AI characters from PixygonServer's Character system:
 - [ ] Set bonuses (wearing full matching set grants extra effect)
 - [ ] Time-period equipment (some items only work in certain time periods)
 
-### 5.3 — Shops & Trading
-
-- [ ] Shop NPC interaction: opens shop UI
-- [ ] Shop inventory (per-NPC item list with prices)
-- [ ] Buy/sell with currency (coins, gems)
-- [ ] Price modifiers (reputation discount, time-period economy)
-- [ ] Sell-back at reduced price
-- [ ] Special merchants (rare items, time-period exclusive stock)
-
-### 5.4 — Crafting
-
-- [ ] Recipe system: input materials → output item
-- [ ] Crafting stations in the world (forge, alchemy table, workbench)
-- [ ] Recipe discovery (find recipe scrolls, learn from NPCs)
-- [ ] Crafting UI: select recipe, show required materials, craft button
-- [ ] Time-period recipes (ancient: blacksmithing, modern: engineering, future: nano-fabrication)
-
-### 5.5 — PixygonServer Sync
+### 6.3 — PixygonServer Item Sync
 
 - [ ] Fetch item catalog: `GET /api/v1/character-items/project/:projectId`
 - [ ] Sync player inventory: character inventory endpoints
@@ -292,7 +319,64 @@ Dialogue uses generated AI characters from PixygonServer's Character system:
 
 ---
 
-## Milestone 6: Sub-Game Framework
+## Milestone 7: Economy & Crafting
+
+**Goal**: Players can buy, sell, and craft items.
+
+*Requires: Inventory System (Milestone 6), NPC Foundation (Milestone 3)*
+
+### 7.1 — Shops & Trading
+
+- [ ] Shop NPC interaction: opens shop UI
+- [ ] Shop inventory (per-NPC item list with prices)
+- [ ] Buy/sell with currency (coins, gems)
+- [ ] Price modifiers (reputation discount, time-period economy)
+- [ ] Sell-back at reduced price
+- [ ] Special merchants (rare items, time-period exclusive stock)
+
+### 7.2 — Crafting
+
+- [ ] Recipe system: input materials → output item
+- [ ] Crafting stations in the world (forge, alchemy table, workbench)
+- [ ] Recipe discovery (find recipe scrolls, learn from NPCs)
+- [ ] Crafting UI: select recipe, show required materials, craft button
+- [ ] Time-period recipes (ancient: blacksmithing, modern: engineering, future: nano-fabrication)
+
+---
+
+## Milestone 8: Quest System
+
+**Goal**: Structured objectives that drive gameplay progression.
+
+*Requires: NPCs (Milestone 3), Inventory (Milestone 6), Combat (Milestone 5)*
+
+### 8.1 — Quest Data
+
+- [ ] `Quest` struct: ID, title, description, objectives, rewards, prerequisites
+- [ ] Quest states: Available, Active, Completed, Failed
+- [ ] Objective types: kill X enemies, collect X items, talk to NPC, reach location, win sub-game
+- [ ] Quest prerequisites (other quests, level, items, relationship tier)
+- [ ] Quest rewards: XP, items, currency, monster eggs, area unlock, relationship boost
+
+### 8.2 — Quest Flow
+
+- [ ] Quest giver NPCs (dialogue triggers quest acceptance)
+- [ ] Quest acceptance UI (show objectives, rewards, accept/decline)
+- [ ] Quest tracking and waypoint system
+- [ ] Quest log UI (active, completed, available quests)
+- [ ] Quest completion notification and reward screen
+
+### 8.3 — Quest Types
+
+- [ ] Main story quests (unlock areas, progress narrative)
+- [ ] Side quests (optional content, extra rewards)
+- [ ] Repeatable quests (daily/weekly challenges)
+- [ ] Sub-game challenges (complete racing track, catch monster, beat arcade score)
+- [ ] Time-period specific quests (only available in certain eras)
+
+---
+
+## Milestone 9: Sub-Game Framework
 
 **Goal**: Shared infrastructure so all sub-games (monsters, racing, arcade) plug into the same system.
 
@@ -300,7 +384,7 @@ Dialogue uses generated AI characters from PixygonServer's Character system:
 
 Infinite follows the *Like a Dragon* (Yakuza) approach: the open world is a hub connecting multiple deep, fully-featured sub-games. Each sub-game is a complete experience — not a minigame. All sub-games are designed in parallel with equal priority.
 
-### 6.1 — Sub-Game Architecture
+### 9.1 — Sub-Game Architecture
 
 - [ ] `SubGame` trait: `fn enter()`, `fn update()`, `fn render()`, `fn exit()`, `fn is_complete() -> bool`
 - [ ] Sub-game state machine (independent from main game state)
@@ -309,7 +393,7 @@ Infinite follows the *Like a Dragon* (Yakuza) approach: the open world is a hub 
 - [ ] Shared reward pipeline: sub-game completion → XP, items, currency, monster eggs fed back to main game
 - [ ] Sub-game leaderboards via PixygonServer `/api/v1/highscores`
 
-### 6.2 — World Entry Points
+### 9.2 — World Entry Points
 
 - [ ] In-world triggers for entering sub-games (NPCs, locations, items, arcade machines)
 - [ ] Sub-game availability varies by time period (ancient: jousting arena, modern: racing track, future: VR arcade)
@@ -318,11 +402,13 @@ Infinite follows the *Like a Dragon* (Yakuza) approach: the open world is a hub 
 
 ---
 
-## Milestone 7: Monster Collection
+## Milestone 10: Monster Collection
 
 **Goal**: Full creature-collection system powered by PixygonServer's monster backend. Catch, train, evolve, and battle monsters.
 
-### 7.1 — Monster Data Integration
+*Requires: Sub-Game Framework (Milestone 9), Inventory (Milestone 6)*
+
+### 10.1 — Monster Data Integration
 
 - [ ] Fetch species catalog: `GET /api/v1/monsters/species?projectId=...`
 - [ ] Fetch move database: `GET /api/v1/monsters/moves`
@@ -330,7 +416,7 @@ Infinite follows the *Like a Dragon* (Yakuza) approach: the open world is a hub 
 - [ ] Fetch player's eggs: `GET /api/v1/monsters/eggs/:userId`
 - [ ] Cache species/move data locally, refresh periodically
 
-### 7.2 — Wild Encounters
+### 10.2 — Wild Encounters
 
 - [ ] Wild monster spawn zones per chunk (species, level range, rarity, time-period specific)
 - [ ] Encounter trigger: walk through tall grass, cave entry, time-of-day events
@@ -338,7 +424,7 @@ Infinite follows the *Like a Dragon* (Yakuza) approach: the open world is a hub 
 - [ ] Catch mechanic: weaken in battle → throw capture item → catch rate calculation
 - [ ] Shiny variant chance (visual indicator + boosted stats)
 
-### 7.3 — Turn-Based Battle System
+### 10.3 — Turn-Based Battle System
 
 - [ ] Battle state machine: `ChooseAction` → `ExecuteTurn` → `ApplyEffects` → `CheckFaint` → loop
 - [ ] Actions: Fight (choose move), Item (use battle item), Switch (swap party member), Run (flee wild battles)
@@ -350,7 +436,7 @@ Infinite follows the *Like a Dragon* (Yakuza) approach: the open world is a hub 
 - [ ] Multi-hit moves, priority moves (-7 to +7)
 - [ ] Battle UI: move selection, HP bars, status icons, type effectiveness indicator, catch rate display
 
-### 7.4 — Monster Party & Management
+### 10.4 — Monster Party & Management
 
 - [ ] Party of up to 6 monsters (synced via `PUT /api/v1/monsters/:userId/party`)
 - [ ] Party management UI: reorder, view stats, view moves
@@ -358,7 +444,7 @@ Infinite follows the *Like a Dragon* (Yakuza) approach: the open world is a hub 
 - [ ] Nickname editing (`PATCH /api/v1/monsters/:userId/:monsterId`)
 - [ ] Healing at rest points or via items (`POST /api/v1/monsters/:userId/:monsterId/heal`)
 
-### 7.5 — Training & Evolution
+### 10.5 — Training & Evolution
 
 - [ ] XP gain from battles (`POST /api/v1/monsters/:userId/:monsterId/experience`)
 - [ ] EV gain from specific defeated species (`POST /api/v1/monsters/:userId/:monsterId/evs`)
@@ -367,7 +453,7 @@ Infinite follows the *Like a Dragon* (Yakuza) approach: the open world is a hub 
 - [ ] Evolution animation sequence
 - [ ] Held items (stat boosts, evolution stones, battle effects)
 
-### 7.6 — Egg System
+### 10.6 — Egg System
 
 - [ ] Eggs received as quest rewards or found in the world
 - [ ] Egg hatching via gameplay activity points (`POST /api/v1/monsters/eggs/:userId/:eggId/points`)
@@ -375,7 +461,7 @@ Infinite follows the *Like a Dragon* (Yakuza) approach: the open world is a hub 
 - [ ] Hatch animation and reveal (`POST /api/v1/monsters/eggs/:userId/:eggId/hatch`)
 - [ ] Hatched monster inherits predetermined IVs, nature, ability from egg data
 
-### 7.7 — NPC Trainer Battles
+### 10.7 — NPC Trainer Battles
 
 - [ ] NPC trainers with predefined monster teams
 - [ ] Challenge triggers: line-of-sight, talk to NPC, story events
@@ -384,11 +470,13 @@ Infinite follows the *Like a Dragon* (Yakuza) approach: the open world is a hub 
 
 ---
 
-## Milestone 8: Racing
+## Milestone 11: Racing
 
 **Goal**: Vehicle-based racing as a full sub-game with time-period themed tracks, vehicle customization, and leaderboards.
 
-### 8.1 — Vehicle Physics
+*Requires: Sub-Game Framework (Milestone 9)*
+
+### 11.1 — Vehicle Physics
 
 - [ ] Vehicle rigid body (rapier3d or custom arcade physics)
 - [ ] Suspension simulation (spring-damper per wheel)
@@ -397,7 +485,7 @@ Infinite follows the *Like a Dragon* (Yakuza) approach: the open world is a hub 
 - [ ] Collision with barriers and other vehicles
 - [ ] Speed boost pads and jump ramps
 
-### 8.2 — Tracks & Courses
+### 11.2 — Tracks & Courses
 
 - [ ] Track definition format (spline path, width, surface type, decoration points)
 - [ ] Checkpoint system (must pass all checkpoints, lap counting)
@@ -408,7 +496,7 @@ Infinite follows the *Like a Dragon* (Yakuza) approach: the open world is a hub 
 - [ ] Track hazards: obstacles, moving barriers, weather effects
 - [ ] Shortcuts and alternate routes
 
-### 8.3 — Race Modes
+### 11.3 — Race Modes
 
 - [ ] Time trial (solo, beat your best time)
 - [ ] Circuit race (multiple laps against AI opponents)
@@ -416,14 +504,14 @@ Infinite follows the *Like a Dragon* (Yakuza) approach: the open world is a hub 
 - [ ] Elimination (last place removed each lap)
 - [ ] Results screen with position, time, rewards
 
-### 8.4 — Vehicle Customization
+### 11.4 — Vehicle Customization
 
 - [ ] Vehicle selection (time-period appropriate vehicles)
 - [ ] Stat tuning: top speed, acceleration, handling, drift
 - [ ] Visual customization: paint, decals
 - [ ] Upgrades purchased with currency or won as race rewards
 
-### 8.5 — Leaderboards
+### 11.5 — Leaderboards
 
 - [ ] Submit race times: `POST /api/v1/highscores` (scoreType: time, gameId: track ID)
 - [ ] Per-track leaderboard display
@@ -431,25 +519,27 @@ Infinite follows the *Like a Dragon* (Yakuza) approach: the open world is a hub 
 
 ---
 
-## Milestone 9: Arcade Machines
+## Milestone 12: Arcade Machines
 
 **Goal**: In-world playable retro games on arcade cabinets. Walk up, press interact, play a full game.
 
-### 9.1 — Arcade Machine World Object
+*Requires: Sub-Game Framework (Milestone 9)*
+
+### 12.1 — Arcade Machine World Object
 
 - [ ] 3D arcade cabinet model placed in the world (time-period appropriate styling)
 - [ ] Interact prompt when player is near
 - [ ] Camera transition: zoom into screen → full-screen sub-game
 - [ ] Exit via pause menu or game-over → camera pulls back to world
 
-### 9.2 — Arcade Game Framework
+### 12.2 — Arcade Game Framework
 
 - [ ] Shared arcade renderer (pixel-art style, low-res render target scaled up)
 - [ ] Arcade input mapping (simplified: D-pad + 2 buttons)
 - [ ] Score tracking and game-over flow
 - [ ] High score entry (initials) → submit to PixygonServer leaderboards
 
-### 9.3 — Example Arcade Games
+### 12.3 — Example Arcade Games
 
 Each time period has its own arcade lineup:
 
@@ -465,7 +555,7 @@ Each time period has its own arcade lineup:
   - Procedural roguelike
   - Hacking puzzle
 
-### 9.4 — Rewards
+### 12.4 — Rewards
 
 - [ ] High scores earn tickets/tokens (currency for prizes)
 - [ ] Arcade-exclusive cosmetic items
@@ -474,11 +564,11 @@ Each time period has its own arcade lineup:
 
 ---
 
-## Milestone 10: Menus & Polish
+## Milestone 13: Menus & HUD
 
-**Goal**: Complete in-game menu system, HUD, map, journal, and UI polish.
+**Goal**: Complete in-game menu system, HUD, map, and journal.
 
-### 10.1 — In-Game HUD
+### 13.1 — In-Game HUD
 
 - [ ] Health bar, mana/energy bar
 - [ ] Minimap (chunk-based, shows nearby NPCs, interactables, sub-game locations)
@@ -488,9 +578,9 @@ Each time period has its own arcade lineup:
 - [ ] Interaction prompt (context-sensitive: "Talk", "Open", "Climb", "Play")
 - [ ] Notification feed (XP gained, item received, quest update)
 
-### 10.2 — Pause/Game Menu
+### 13.2 — Pause/Game Menu
 
-- [ ] **Inventory tab**: Full inventory management (see Milestone 5)
+- [ ] **Inventory tab**: Full inventory management
 - [ ] **Equipment tab**: Equip/unequip gear with stat preview
 - [ ] **Monster tab**: Party management, monster details, egg progress
 - [ ] **Map tab**: Full world map with discovered locations, quest markers, sub-game locations
@@ -499,16 +589,7 @@ Each time period has its own arcade lineup:
 - [ ] **Settings tab**: Existing settings menu (video, audio, gameplay)
 - [ ] **Save/Load tab**: Manual save, load save slot, cloud sync status
 
-### 10.3 — Quest System
-
-- [ ] `Quest` struct: ID, title, description, objectives, rewards, prerequisites
-- [ ] Objective types: kill X enemies, collect X items, talk to NPC, reach location, win sub-game
-- [ ] Quest giver NPCs (dialogue triggers quest acceptance)
-- [ ] Quest tracking and waypoint system
-- [ ] Quest completion rewards: XP, items, currency, monster eggs, area unlock
-- [ ] Main story quests vs side quests vs sub-game challenges
-
-### 10.4 — UI Polish
+### 13.3 — UI Polish
 
 - [ ] Consistent art style across all menus (time-period themed color palettes)
 - [ ] Transition animations between screens
@@ -518,11 +599,13 @@ Each time period has its own arcade lineup:
 
 ---
 
-## Milestone 11: Multiplayer
+## Milestone 14: Multiplayer
 
 **Goal**: Multiplayer-aware architecture, single-player implementation first. Networking built on PixygonServer WebSocket infrastructure.
 
-### 11.1 — Network Layer (`infinite-net`)
+*Requires: All gameplay systems (Milestones 1-12)*
+
+### 14.1 — Network Layer (`infinite-net`)
 
 - [ ] WebSocket client connecting to PixygonServer
 - [ ] JWT authentication flow (login → token → connect)
@@ -531,7 +614,7 @@ Each time period has its own arcade lineup:
 - [ ] Reconnection with exponential backoff
 - [ ] Heartbeat / keepalive
 
-### 11.2 — State Synchronization
+### 14.2 — State Synchronization
 
 - [ ] Entity ownership model (each player owns their character + monsters)
 - [ ] Position/rotation sync (send at 20Hz, interpolate on receiver)
@@ -540,7 +623,7 @@ Each time period has its own arcade lineup:
 - [ ] Interest management: only sync entities within player's region
 - [ ] Delta compression (only send changed fields)
 
-### 11.3 — Shared World Features
+### 14.3 — Shared World Features
 
 - [ ] See other players in the world (character mesh + nametag)
 - [ ] Emotes and chat
@@ -550,7 +633,7 @@ Each time period has its own arcade lineup:
 - [ ] Arcade leaderboard challenges (beat friend's score)
 - [ ] Trading items and monsters between players
 
-### 11.4 — Offline Support
+### 14.4 — Offline Support
 
 - [ ] Offline action queue: record actions when disconnected
 - [ ] Sync queue on reconnection
@@ -560,11 +643,11 @@ Each time period has its own arcade lineup:
 
 ---
 
-## Milestone 12: Launch Preparation
+## Milestone 15: Launch Preparation
 
 **Goal**: Performance, stability, content, and release readiness.
 
-### 12.1 — Performance
+### 15.1 — Performance
 
 - [ ] GPU profiling and optimization (Vulkan pipeline profiling)
 - [ ] Draw call batching and instanced rendering
@@ -573,7 +656,7 @@ Each time period has its own arcade lineup:
 - [ ] Level-of-detail system for distant objects
 - [ ] Occlusion culling
 
-### 12.2 — Testing
+### 15.2 — Testing
 
 - [ ] Unit tests for all game systems (combat math, GOAP planner, inventory logic)
 - [ ] Integration tests for PixygonServer API calls
@@ -581,7 +664,7 @@ Each time period has its own arcade lineup:
 - [ ] Crash reporting and telemetry
 - [ ] Cross-platform testing: Linux, Windows, macOS
 
-### 12.3 — Content Pipeline
+### 15.3 — Content Pipeline
 
 - [ ] Asset import tooling (batch convert models, textures)
 - [ ] World editor or level data format for designers
@@ -589,7 +672,7 @@ Each time period has its own arcade lineup:
 - [ ] Item catalog management via PixygonServer admin API
 - [ ] Quest authoring format (TOML/JSON quest definitions)
 
-### 12.4 — Release
+### 15.4 — Release
 
 - [ ] Launcher / auto-updater
 - [ ] First-run tutorial / onboarding sequence
@@ -601,19 +684,19 @@ Each time period has its own arcade lineup:
 
 ## PixygonServer Integration Summary
 
-| Game System | Server Endpoints | Sync Strategy |
-|-------------|-----------------|---------------|
-| **Auth** | JWT login | On launch, refresh periodically |
-| **Save Data** | `/api/v1/savedata/:projectId/:userId` | Auto-save to local + cloud sync on key events |
-| **Monsters** | `/api/v1/monsters/*` | Fetch on load, sync after battles/catches |
-| **Monster Species** | `/api/v1/monsters/species` | Cache locally, refresh on game start |
-| **Monster Moves** | `/api/v1/monsters/moves` | Cache locally, refresh on game start |
-| **Eggs** | `/api/v1/monsters/eggs/*` | Sync points on activity, hatch on threshold |
-| **Items** | `/api/v1/character-items/*` | Cache catalog, sync inventory changes |
-| **Characters (NPCs)** | `/api/v1/characters/*` | Fetch NPC personality on first dialogue |
-| **Leaderboards** | `/api/v1/highscores/*` | Submit on sub-game completion, fetch for display |
-| **AI Dialogue** | AI service endpoints | Stream during conversation, cache recent exchanges |
-| **User Profile** | User endpoints | Sync XP, level, play time |
+| Game System | Server Endpoints | Sync Strategy | Milestone |
+|-------------|-----------------|---------------|-----------|
+| **Auth** | JWT login | On launch, refresh periodically | 3 ✅ |
+| **AI Dialogue** | `/v1/ai/chat` | Stream during conversation | 3 ✅ |
+| **Characters (NPCs)** | `/v1/characters/*` | Fetch/create on first dialogue | 3 ✅ |
+| **Save Data** | `/api/v1/savedata/:projectId/:userId` | Auto-save to local + cloud sync | 2 |
+| **Items** | `/api/v1/character-items/*` | Cache catalog, sync inventory | 6 |
+| **Monsters** | `/api/v1/monsters/*` | Fetch on load, sync after battles | 10 |
+| **Monster Species** | `/api/v1/monsters/species` | Cache locally, refresh on start | 10 |
+| **Monster Moves** | `/api/v1/monsters/moves` | Cache locally, refresh on start | 10 |
+| **Eggs** | `/api/v1/monsters/eggs/*` | Sync points on activity | 10 |
+| **Leaderboards** | `/api/v1/highscores/*` | Submit on sub-game completion | 9-12 |
+| **User Profile** | User endpoints | Sync XP, level, play time | 5 |
 
 ---
 
@@ -629,7 +712,7 @@ Each time period has its own arcade lineup:
 | UI | egui | Already integrated, immediate mode |
 | Assets | glTF 2.0 + KTX2 | Industry standard |
 | NPC AI | GOAP | Flexible, emergent behavior without giant state machines |
-| NPC Dialogue | BimboChat character system | Rich personality, AI-driven conversations |
+| NPC Dialogue | PixygonServer AI Chat | Rich personality, AI-driven conversations |
 | Serialization | serde (JSON for saves, bincode for network) | JSON for debuggability, bincode for bandwidth |
 | Multiplayer | Multiplayer-aware, single-player first | Ship playable game sooner, add MP incrementally |
 
@@ -638,29 +721,50 @@ Each time period has its own arcade lineup:
 ## Dependency Graph
 
 ```
-Milestone 1 (Engine Core)
-    ├── ECS ──────────────┐
-    ├── Assets ───────────┤
-    ├── Audio ────────────┤
-    └── Render ───────────┤
-                          ▼
-Milestone 2 (World) ─────┤
-                          ▼
-    ┌─────────────────────┼─────────────────────┐
-    ▼                     ▼                     ▼
-Milestone 3 (NPCs)   Milestone 4 (Combat)  Milestone 6 (Sub-Game Framework)
-    │                     │                     │
-    ▼                     ▼                 ┌───┼───┐
-Milestone 5 (Inventory)  │                 ▼   ▼   ▼
-    │                     │                M7  M8  M9
-    ▼                     ▼              (Mon)(Race)(Arcade)
-Milestone 10 (Menus & Polish) ◄────────────┘
+Milestone 1 (Engine Core) ✅
     │
     ▼
-Milestone 11 (Multiplayer)
+Milestone 2 (World & Exploration)
     │
     ▼
-Milestone 12 (Launch)
+Milestone 3 (NPC Foundation & AI Dialogue) ✅
+    │
+    ├──────────────────────────────────────┐
+    ▼                                      ▼
+Milestone 4 (GOAP & Enemies)          Milestone 5 (Stats & Combat)
+    │                                      │
+    │                                      ▼
+    │                                 Milestone 6 (Inventory & Equipment)
+    │                                      │
+    │                                      ▼
+    │                                 Milestone 7 (Economy & Crafting)
+    │                                      │
+    └──────────────────────────────────────┤
+                                           ▼
+                                      Milestone 8 (Quest System)
+                                           │
+                                           ▼
+                                      Milestone 9 (Sub-Game Framework)
+                                           │
+                   ┌───────────────────────┼───────────────────────┐
+                   ▼                       ▼                       ▼
+              Milestone 10            Milestone 11            Milestone 12
+              (Monsters)              (Racing)                (Arcade)
+                   │                       │                       │
+                   └───────────────────────┼───────────────────────┘
+                                           ▼
+                                      Milestone 13 (Menus & HUD)
+                                           │
+                                           ▼
+                                      Milestone 14 (Multiplayer)
+                                           │
+                                           ▼
+                                      Milestone 15 (Launch)
 ```
 
-Milestones 7, 8, and 9 (Monster Collection, Racing, Arcade Machines) are designed **in parallel** — they share the sub-game framework from Milestone 6 and can be developed simultaneously with equal priority.
+**Key dependency notes:**
+- Milestones 10, 11, 12 (Monster Collection, Racing, Arcade) can be developed **in parallel** after the Sub-Game Framework
+- Combat (M5) must come before Inventory (M6) so equipment stats can apply to combat
+- Inventory (M6) must come before Economy (M7) for shops to work
+- Quest System (M8) needs NPCs, Combat, and Inventory for objectives and rewards
+- GOAP (M4) and Combat (M5) can be developed in parallel after NPC Foundation

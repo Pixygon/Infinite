@@ -36,6 +36,22 @@ pub enum InputAction {
     QuickSave,
     /// Quick load (F9 by default)
     QuickLoad,
+    /// Attack (Left mouse button by default)
+    Attack,
+    /// Heavy attack (Right mouse button by default)
+    HeavyAttack,
+    /// Skill slot 1 (1 key by default)
+    Skill1,
+    /// Skill slot 2 (2 key by default)
+    Skill2,
+    /// Skill slot 3 (3 key by default)
+    Skill3,
+    /// Skill slot 4 (4 key by default)
+    Skill4,
+    /// Rune compose mode (R key by default)
+    RuneCompose,
+    /// Dodge (Left Ctrl by default)
+    Dodge,
 }
 
 /// Current state of all inputs for a frame
@@ -146,6 +162,16 @@ impl Default for InputBindings {
         bindings.bind(KeyCode::F5, InputAction::QuickSave);
         bindings.bind(KeyCode::F9, InputAction::QuickLoad);
 
+        // Combat
+        bindings.bind_mouse(0, InputAction::Attack); // Left mouse button
+        bindings.bind_mouse(1, InputAction::HeavyAttack); // Right mouse button
+        bindings.bind(KeyCode::Digit1, InputAction::Skill1);
+        bindings.bind(KeyCode::Digit2, InputAction::Skill2);
+        bindings.bind(KeyCode::Digit3, InputAction::Skill3);
+        bindings.bind(KeyCode::Digit4, InputAction::Skill4);
+        bindings.bind(KeyCode::KeyR, InputAction::RuneCompose);
+        bindings.bind(KeyCode::ControlLeft, InputAction::Dodge);
+
         bindings
     }
 }
@@ -159,6 +185,13 @@ impl InputBindings {
     /// Bind a key to an action
     pub fn bind(&mut self, key: KeyCode, action: InputAction) {
         let binding = InputBinding::Key(key);
+        self.bindings.insert(binding, action);
+        self.reverse.entry(action).or_default().push(binding);
+    }
+
+    /// Bind a mouse button to an action
+    pub fn bind_mouse(&mut self, button: u32, action: InputAction) {
+        let binding = InputBinding::Mouse(button);
         self.bindings.insert(binding, action);
         self.reverse.entry(action).or_default().push(binding);
     }

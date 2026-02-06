@@ -7,6 +7,9 @@ mod persistence;
 pub use persistence::save_character;
 
 use chrono::{DateTime, Utc};
+use infinite_game::combat::element::Element;
+use infinite_game::combat::weapon::WeaponType;
+use infinite_game::player::stats::{CharacterStats, StatGrowth};
 use serde::{Deserialize, Serialize};
 
 /// Biological sex selection for character base body type
@@ -127,6 +130,130 @@ impl Archetype {
             Self::Technomage,
             Self::ParadoxWeaver,
         ]
+    }
+
+    /// Get base combat stats for this archetype at level 1
+    pub fn base_stats(&self) -> CharacterStats {
+        match self {
+            // Chronomancer: Balanced mage, moderate HP, high crit
+            Self::Chronomancer => CharacterStats {
+                max_hp: 80.0,
+                current_hp: 80.0,
+                attack: 12.0,
+                defense: 4.0,
+                speed: 1.0,
+                crit_chance: 0.10,
+                crit_multiplier: 1.75,
+                elemental_affinity: self.starting_element(),
+            },
+            // Temporal Hunter: Glass cannon, low HP, high damage/speed
+            Self::TemporalHunter => CharacterStats {
+                max_hp: 70.0,
+                current_hp: 70.0,
+                attack: 15.0,
+                defense: 3.0,
+                speed: 1.3,
+                crit_chance: 0.15,
+                crit_multiplier: 2.0,
+                elemental_affinity: self.starting_element(),
+            },
+            // Vanguard: Tank, high HP/defense, lower damage
+            Self::Vanguard => CharacterStats {
+                max_hp: 120.0,
+                current_hp: 120.0,
+                attack: 10.0,
+                defense: 8.0,
+                speed: 0.9,
+                crit_chance: 0.05,
+                crit_multiplier: 1.5,
+                elemental_affinity: self.starting_element(),
+            },
+            // Technomage: Hybrid, moderate stats, high crit damage
+            Self::Technomage => CharacterStats {
+                max_hp: 85.0,
+                current_hp: 85.0,
+                attack: 14.0,
+                defense: 4.0,
+                speed: 1.0,
+                crit_chance: 0.08,
+                crit_multiplier: 2.0,
+                elemental_affinity: self.starting_element(),
+            },
+            // Paradox Weaver: Unpredictable, balanced with very high crit chance
+            Self::ParadoxWeaver => CharacterStats {
+                max_hp: 90.0,
+                current_hp: 90.0,
+                attack: 11.0,
+                defense: 5.0,
+                speed: 1.1,
+                crit_chance: 0.20,
+                crit_multiplier: 1.6,
+                elemental_affinity: self.starting_element(),
+            },
+        }
+    }
+
+    /// Get the starting elemental affinity for this archetype
+    pub fn starting_element(&self) -> Element {
+        match self {
+            Self::Chronomancer => Element::Void,
+            Self::TemporalHunter => Element::Air,
+            Self::Vanguard => Element::Earth,
+            Self::Technomage => Element::Fire,
+            Self::ParadoxWeaver => Element::Meta,
+        }
+    }
+
+    /// Get the starting weapon type for this archetype
+    pub fn starting_weapon_type(&self) -> WeaponType {
+        match self {
+            Self::Chronomancer => WeaponType::Staff,
+            Self::TemporalHunter => WeaponType::DualBlades,
+            Self::Vanguard => WeaponType::Sword,
+            Self::Technomage => WeaponType::Wand,
+            Self::ParadoxWeaver => WeaponType::Scythe,
+        }
+    }
+
+    /// Get stat growth rates per level for this archetype
+    pub fn stat_growth(&self) -> StatGrowth {
+        match self {
+            // Chronomancer: Balanced growth
+            Self::Chronomancer => StatGrowth {
+                hp_per_level: 8.0,
+                attack_per_level: 2.5,
+                defense_per_level: 1.0,
+                speed_per_level: 0.0,
+            },
+            // Temporal Hunter: Attack-focused growth
+            Self::TemporalHunter => StatGrowth {
+                hp_per_level: 6.0,
+                attack_per_level: 3.5,
+                defense_per_level: 0.5,
+                speed_per_level: 0.02,
+            },
+            // Vanguard: Defense/HP focused growth
+            Self::Vanguard => StatGrowth {
+                hp_per_level: 15.0,
+                attack_per_level: 1.5,
+                defense_per_level: 2.0,
+                speed_per_level: 0.0,
+            },
+            // Technomage: Attack focused with some HP
+            Self::Technomage => StatGrowth {
+                hp_per_level: 7.0,
+                attack_per_level: 3.0,
+                defense_per_level: 1.0,
+                speed_per_level: 0.0,
+            },
+            // Paradox Weaver: Balanced growth
+            Self::ParadoxWeaver => StatGrowth {
+                hp_per_level: 9.0,
+                attack_per_level: 2.0,
+                defense_per_level: 1.5,
+                speed_per_level: 0.01,
+            },
+        }
     }
 }
 

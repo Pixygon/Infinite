@@ -81,6 +81,7 @@ toml = "0.8"
 dirs = "5"
 reqwest = { version = "0.12", features = ["json", "rustls-tls"] }
 chrono = { version = "0.4", features = ["serde"] }
+rand = "0.8"
 
 [package]
 name = "infinite"
