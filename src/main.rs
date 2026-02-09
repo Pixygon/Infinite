@@ -2612,7 +2612,7 @@ impl InfiniteApp {
             if let (Some(basic_pipeline), Some(capsule_mesh), Some(player)) =
                 (&render_ctx.basic_pipeline, &render_ctx.capsule_mesh, &self.player)
             {
-                let player_pos = player.position();
+                let player_pos = player.character.center_position();
                 let model = Mat4::from_translation(player_pos);
 
                 let push = BasicPushConstants::new(
@@ -2681,7 +2681,7 @@ impl InfiniteApp {
                 if let Some(wireframe_pipeline) = &render_ctx.wireframe_pipeline {
                     // Render player collider capsule as wireframe
                     if let (Some(capsule_mesh), Some(player)) = (&render_ctx.capsule_mesh, &self.player) {
-                        let player_pos = player.position();
+                        let player_pos = player.character.center_position();
                         let model = Mat4::from_translation(player_pos);
 
                         let push = BasicPushConstants::new(
