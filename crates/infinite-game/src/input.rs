@@ -52,6 +52,8 @@ pub enum InputAction {
     RuneCompose,
     /// Dodge (Left Ctrl by default)
     Dodge,
+    /// Toggle inventory (Tab by default)
+    Inventory,
 }
 
 /// Current state of all inputs for a frame
@@ -171,6 +173,7 @@ impl Default for InputBindings {
         bindings.bind(KeyCode::Digit4, InputAction::Skill4);
         bindings.bind(KeyCode::KeyR, InputAction::RuneCompose);
         bindings.bind(KeyCode::ControlLeft, InputAction::Dodge);
+        bindings.bind(KeyCode::Tab, InputAction::Inventory);
 
         bindings
     }

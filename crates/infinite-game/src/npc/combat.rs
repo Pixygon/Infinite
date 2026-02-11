@@ -3,6 +3,7 @@
 use crate::combat::damage::{AttackType, calculate_combat_damage};
 use crate::combat::element::Element;
 use crate::combat::equipment::EquipmentSet;
+use crate::combat::inventory::Inventory;
 use crate::combat::rune::{Rune, RuneComposer};
 use crate::combat::skill::SkillSlot;
 use crate::combat::status::StatusManager;
@@ -148,6 +149,9 @@ pub struct PlayerCombatState {
     /// Heavy attack windup timer (runtime only)
     #[serde(skip)]
     pub heavy_attack_timer: f32,
+    /// Player inventory
+    #[serde(default)]
+    pub inventory: Inventory,
 }
 
 fn default_skill_slots() -> Vec<SkillSlot> {
@@ -173,6 +177,7 @@ impl PlayerCombatState {
             status_manager: StatusManager::new(),
             active_attack_type: None,
             heavy_attack_timer: 0.0,
+            inventory: Inventory::new(),
         }
     }
 
@@ -194,6 +199,7 @@ impl PlayerCombatState {
             status_manager: StatusManager::new(),
             active_attack_type: None,
             heavy_attack_timer: 0.0,
+            inventory: Inventory::new(),
         }
     }
 

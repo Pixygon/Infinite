@@ -90,7 +90,7 @@ use crate::character::CharacterData;
 use crate::save::{SaveData, PlayerSaveData, WorldSaveData};
 use crate::settings::GameSettings;
 use crate::state::{ApplicationState, StateTransition};
-use crate::ui::{CharacterCreator, LoadingScreen, MainMenu, PauseMenu, SaveLoadAction, SaveLoadMenu, SettingsMenu};
+use crate::ui::{CharacterCreator, InventoryAction, InventoryMenu, LoadingScreen, MainMenu, PauseMenu, SaveLoadAction, SaveLoadMenu, SettingsMenu};
 use std::collections::HashMap;
 
 /// Mesh buffers for GPU rendering
@@ -278,6 +278,12 @@ struct InfiniteApp {
     level_up_notification: Option<(u32, f32)>,
     /// Stat growth for current archetype (cached)
     archetype_growth: Option<infinite_game::player::stats::StatGrowth>,
+
+    // Inventory UI
+    /// Whether the inventory screen is open
+    show_inventory: bool,
+    /// Inventory menu state
+    inventory_menu: InventoryMenu,
 }
 
 impl InfiniteApp {
@@ -346,6 +352,9 @@ impl InfiniteApp {
             damage_numbers: Vec::new(),
             level_up_notification: None,
             archetype_growth: None,
+
+            show_inventory: false,
+            inventory_menu: InventoryMenu::new(),
         }
     }
 
@@ -459,6 +468,20 @@ impl InfiniteApp {
                 let stats = archetype.base_stats();
                 self.player_combat = infinite_game::npc::combat::PlayerCombatState::from_stats(stats);
                 self.archetype_growth = Some(archetype.stat_growth());
+
+                // Create starter items for this archetype
+                let (inv_items, main_weapon) = infinite_game::combat::starter_items::create_starter_items(
+                    &format!("{:?}", archetype),
+                    archetype.starting_weapon_type(),
+                    archetype.starting_element(),
+                );
+                let _ = self.player_combat.equipment.equip(
+                    infinite_game::combat::equipment::EquipmentSlot::MainHand,
+                    main_weapon,
+                );
+                for item in inv_items {
+                    let _ = self.player_combat.inventory.add_item(item);
+                }
             } else {
                 self.player_combat = PlayerCombatState::new();
                 self.archetype_growth = None;
@@ -552,6 +575,7 @@ impl InfiniteApp {
         self.pending_time_transition = None;
         self.climbing = false;
         self.climb_remaining = 0.0;
+        self.show_inventory = false;
 
         // Clear terrain meshes
         if let Some(render_ctx) = &mut self.render_ctx {
@@ -593,7 +617,7 @@ impl InfiniteApp {
             equipment: Some(self.player_combat.equipment.clone()),
             skill_slots: Some(self.player_combat.skill_slots.clone()),
             known_runes: Some(self.player_combat.known_runes.clone()),
-            inventory: None,
+            inventory: Some(self.player_combat.inventory.items.clone()),
         }
     }
 
@@ -673,6 +697,11 @@ impl InfiniteApp {
         }
         if let Some(progression) = data.player_progression {
             self.player_combat.progression = progression;
+        }
+
+        // Restore inventory
+        if let Some(items) = data.inventory {
+            self.player_combat.inventory.items = items;
         }
 
         // Reset climbing state
@@ -1446,6 +1475,17 @@ impl InfiniteApp {
                     }
                 }
 
+                // --- Inventory toggle ---
+                if self.input_handler.state.is_just_pressed(InputAction::Inventory) {
+                    self.show_inventory = !self.show_inventory;
+                    if self.show_inventory {
+                        self.update_cursor_capture(false);
+                        self.inventory_menu = InventoryMenu::new();
+                    } else {
+                        self.update_cursor_capture(true);
+                    }
+                }
+
                 // --- Save/Load ---
                 if self.input_handler.state.is_just_pressed(InputAction::QuickSave) {
                     self.do_quicksave();
@@ -1584,6 +1624,8 @@ impl InfiniteApp {
         let mut pending_transition = StateTransition::None;
         let mut should_save_settings = false;
         let mut save_load_pending_action: Option<(StateTransition, SaveLoadAction)> = None;
+        let mut inventory_pending_action = InventoryAction::None;
+        let mut close_inventory = false;
 
         if let Some(gui) = &mut self.gui {
             gui.immediate_ui(|gui| {
@@ -2341,6 +2383,20 @@ impl InfiniteApp {
                                         });
                                 }
 
+                                // --- Inventory overlay ---
+                                if self.show_inventory {
+                                    let (inv_transition, inv_action) = self.inventory_menu.render(
+                                        ui,
+                                        &self.player_combat.equipment,
+                                        &self.player_combat.inventory,
+                                        &self.player_combat.stats,
+                                    );
+                                    inventory_pending_action = inv_action;
+                                    if matches!(inv_transition, StateTransition::Pop) {
+                                        close_inventory = true;
+                                    }
+                                }
+
                                 StateTransition::None
                             }
                             ApplicationState::Exiting => StateTransition::None,
@@ -2403,6 +2459,50 @@ impl InfiniteApp {
             if !matches!(result_transition, StateTransition::None) {
                 pending_transition = result_transition;
             }
+        }
+
+        // Close inventory if requested (deferred from UI closure)
+        if close_inventory {
+            self.show_inventory = false;
+            self.update_cursor_capture(true);
+        }
+
+        // Process inventory actions (deferred to avoid borrow conflicts)
+        match inventory_pending_action {
+            InventoryAction::EquipItem { inventory_index, slot } => {
+                // Validate category compatibility before removing from inventory
+                let can_equip = self.player_combat.inventory.get(inventory_index)
+                    .map(|item| item.category == slot.valid_category())
+                    .unwrap_or(false);
+                if can_equip {
+                    if let Some(item) = self.player_combat.inventory.remove_item(inventory_index) {
+                        match self.player_combat.equipment.equip(slot, item.clone()) {
+                            Ok(Some(prev)) => {
+                                let _ = self.player_combat.inventory.add_item(prev);
+                            }
+                            Ok(None) => {}
+                            Err(e) => {
+                                // Put item back on failure
+                                let _ = self.player_combat.inventory.add_item(item);
+                                self.notification_text = Some(format!("Cannot equip: {}", e));
+                                self.notification_timer = 2.0;
+                            }
+                        }
+                    }
+                } else {
+                    self.notification_text = Some("Item cannot be equipped in that slot".to_string());
+                    self.notification_timer = 2.0;
+                }
+            }
+            InventoryAction::UnequipItem { slot } => {
+                if let Some(item) = self.player_combat.equipment.unequip(slot) {
+                    if self.player_combat.inventory.add_item(item).is_err() {
+                        self.notification_text = Some("Inventory full!".to_string());
+                        self.notification_timer = 2.0;
+                    }
+                }
+            }
+            InventoryAction::None => {}
         }
 
         // Apply state transition after UI is done
@@ -3152,7 +3252,12 @@ impl ApplicationHandler for InfiniteApp {
                 if logical_key == Key::Named(NamedKey::Escape) && state == ElementState::Pressed {
                     match &self.app_state {
                         ApplicationState::Playing => {
-                            self.apply_transition(StateTransition::Push(ApplicationState::Paused));
+                            if self.show_inventory {
+                                self.show_inventory = false;
+                                self.update_cursor_capture(true);
+                            } else {
+                                self.apply_transition(StateTransition::Push(ApplicationState::Paused));
+                            }
                         }
                         ApplicationState::Paused => {
                             self.apply_transition(StateTransition::Pop);

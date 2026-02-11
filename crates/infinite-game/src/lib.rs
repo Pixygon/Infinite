@@ -25,6 +25,7 @@ pub use player::{CharacterStats, EnemyType, MovementConfig, PlayerController, Pl
 // Combat system re-exports
 pub use combat::{
     AttackType, DamageEvent, Element, EquipmentSet, EquipmentSlot, Gem, GemQuality, GemShape,
-    Item, ItemCategory, ItemId, ItemRarity, Rune, RuneComposer, Skill, SkillId, SkillSlot,
-    StatModifiers, StatusEffect, StatusEffectType, StatusManager, WeaponData, WeaponType,
+    Inventory, Item, ItemCategory, ItemId, ItemRarity, MAX_INVENTORY_SIZE, Rune, RuneComposer,
+    Skill, SkillId, SkillSlot, StatModifiers, StatusEffect, StatusEffectType, StatusManager,
+    WeaponData, WeaponType,
 };
