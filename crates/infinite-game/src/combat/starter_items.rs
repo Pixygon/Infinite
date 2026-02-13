@@ -1,10 +1,12 @@
 //! Per-archetype starting gear
 //!
-//! Creates starter weapons, armor, and consumables for each character archetype.
+//! Creates starter weapons, armor, consumables, and skills for each character archetype.
 
 use super::damage::StatModifiers;
 use super::element::Element;
 use super::item::{Item, ItemCategory, ItemId, ItemRarity};
+use super::skill::{ActiveSkill, Skill, SkillId, SkillShape, SkillSlot, SkillTarget};
+use super::status::StatusEffectType;
 use super::weapon::{WeaponData, WeaponType};
 
 /// Create starter items for a given archetype.
@@ -87,4 +89,89 @@ fn create_health_potion(count: u32) -> Item {
         stack_count: count,
         max_stack: 10,
     }
+}
+
+/// Create starter skill slots for a given archetype.
+/// Returns 4 skill slots with the first slot populated with a starter skill.
+pub fn create_starter_skills(archetype_name: &str) -> Vec<SkillSlot> {
+    let skill = match archetype_name {
+        "Chronomancer" => ActiveSkill {
+            id: SkillId(4001),
+            name: "Time Bolt".to_string(),
+            description: "Hurls a bolt of temporal energy.".to_string(),
+            element: Element::Void,
+            shape: SkillShape::Bolt,
+            target: SkillTarget::Projectile { speed: 25.0, range: 15.0 },
+            base_damage: 15.0,
+            damage_multiplier: 1.5,
+            cooldown: 3.0,
+            cost: 20.0,
+            applies_status: None,
+            status_duration: 0.0,
+        },
+        "TemporalHunter" => ActiveSkill {
+            id: SkillId(4002),
+            name: "Shadow Strike".to_string(),
+            description: "A swift strike from the shadows of time.".to_string(),
+            element: Element::Air,
+            shape: SkillShape::Wave,
+            target: SkillTarget::SingleTarget,
+            base_damage: 20.0,
+            damage_multiplier: 1.8,
+            cooldown: 4.0,
+            cost: 15.0,
+            applies_status: None,
+            status_duration: 0.0,
+        },
+        "Vanguard" => ActiveSkill {
+            id: SkillId(4003),
+            name: "Shield Bash".to_string(),
+            description: "Bash enemies with your shield, stunning them.".to_string(),
+            element: Element::Earth,
+            shape: SkillShape::Blast,
+            target: SkillTarget::Cone { angle: 90.0, range: 3.0 },
+            base_damage: 10.0,
+            damage_multiplier: 1.2,
+            cooldown: 5.0,
+            cost: 25.0,
+            applies_status: Some(StatusEffectType::Stunned),
+            status_duration: 2.0,
+        },
+        "Technomage" => ActiveSkill {
+            id: SkillId(4004),
+            name: "Fire Blast".to_string(),
+            description: "Unleashes a blast of techno-magical fire.".to_string(),
+            element: Element::Fire,
+            shape: SkillShape::Blast,
+            target: SkillTarget::AreaAroundSelf { radius: 5.0 },
+            base_damage: 18.0,
+            damage_multiplier: 1.6,
+            cooldown: 3.5,
+            cost: 22.0,
+            applies_status: Some(StatusEffectType::Burning),
+            status_duration: 3.0,
+        },
+        "ParadoxWeaver" => ActiveSkill {
+            id: SkillId(4005),
+            name: "Paradox Bolt".to_string(),
+            description: "A bolt of contradictory energy that tears at reality.".to_string(),
+            element: Element::Meta,
+            shape: SkillShape::Bolt,
+            target: SkillTarget::Projectile { speed: 20.0, range: 20.0 },
+            base_damage: 25.0,
+            damage_multiplier: 2.0,
+            cooldown: 6.0,
+            cost: 30.0,
+            applies_status: None,
+            status_duration: 0.0,
+        },
+        _ => return vec![SkillSlot::empty(); 4],
+    };
+
+    let mut slots = vec![SkillSlot::with_skill(Skill::Active(skill))];
+    // Fill remaining 3 slots as empty
+    for _ in 0..3 {
+        slots.push(SkillSlot::empty());
+    }
+    slots
 }

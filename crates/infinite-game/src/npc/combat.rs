@@ -152,6 +152,21 @@ pub struct PlayerCombatState {
     /// Player inventory
     #[serde(default)]
     pub inventory: Inventory,
+    /// Dodge cooldown duration in seconds
+    #[serde(skip)]
+    pub dodge_cooldown: f32,
+    /// Remaining dodge cooldown timer
+    #[serde(skip)]
+    pub dodge_cooldown_timer: f32,
+    /// Whether the player is currently dodging
+    #[serde(skip)]
+    pub is_dodging: bool,
+    /// Remaining dodge duration timer
+    #[serde(skip)]
+    pub dodge_timer: f32,
+    /// Dodge duration in seconds
+    #[serde(skip)]
+    pub dodge_duration: f32,
 }
 
 fn default_skill_slots() -> Vec<SkillSlot> {
@@ -178,6 +193,11 @@ impl PlayerCombatState {
             active_attack_type: None,
             heavy_attack_timer: 0.0,
             inventory: Inventory::new(),
+            dodge_cooldown: 1.5,
+            dodge_cooldown_timer: 0.0,
+            is_dodging: false,
+            dodge_timer: 0.0,
+            dodge_duration: 0.3,
         }
     }
 
@@ -200,6 +220,11 @@ impl PlayerCombatState {
             active_attack_type: None,
             heavy_attack_timer: 0.0,
             inventory: Inventory::new(),
+            dodge_cooldown: 1.5,
+            dodge_cooldown_timer: 0.0,
+            is_dodging: false,
+            dodge_timer: 0.0,
+            dodge_duration: 0.3,
         }
     }
 
@@ -336,6 +361,22 @@ impl PlayerCombatState {
         }
     }
 
+    /// Try to start a dodge. Returns true if dodge started.
+    pub fn try_dodge(&mut self) -> bool {
+        if self.dodge_cooldown_timer > 0.0 || self.is_dodging {
+            return false;
+        }
+        if self.status_manager.is_movement_prevented() {
+            return false;
+        }
+        self.is_dodging = true;
+        self.dodge_timer = self.dodge_duration;
+        self.dodge_cooldown_timer = self.dodge_cooldown;
+        // Grant invincibility during dodge
+        self.invincibility_timer = self.invincibility_timer.max(self.dodge_duration);
+        true
+    }
+
     /// Take elemental damage (applies status effects from element)
     pub fn take_elemental_damage(&mut self, damage: f32, _element: Element) -> f32 {
         // Let shields absorb first
@@ -387,6 +428,20 @@ impl PlayerCombatState {
             self.damage_flash_timer = (self.damage_flash_timer - delta).max(0.0);
         }
 
+        // Dodge timers
+        if self.dodge_timer > 0.0 {
+            self.dodge_timer = (self.dodge_timer - delta).max(0.0);
+            if self.dodge_timer <= 0.0 {
+                self.is_dodging = false;
+            }
+        }
+        if self.dodge_cooldown_timer > 0.0 {
+            self.dodge_cooldown_timer = (self.dodge_cooldown_timer - delta).max(0.0);
+        }
+
+        // Mana regeneration
+        self.stats.regenerate_mana(delta);
+
         // Skill cooldowns
         for slot in &mut self.skill_slots {
             slot.update(delta);
@@ -413,12 +468,16 @@ impl PlayerCombatState {
     /// Respawn player (full heal, reset state)
     pub fn respawn(&mut self) {
         self.stats.current_hp = self.stats.max_hp;
+        self.stats.current_mana = self.stats.max_mana;
         self.damage_flash_timer = 0.0;
         self.attack_timer = 0.0;
         self.is_attacking = false;
         self.invincibility_timer = 1.0; // Brief invincibility on respawn
         self.active_attack_type = None;
         self.heavy_attack_timer = 0.0;
+        self.is_dodging = false;
+        self.dodge_timer = 0.0;
+        self.dodge_cooldown_timer = 0.0;
         self.status_manager.clear();
     }
 
@@ -546,5 +605,39 @@ mod tests {
 
         assert_eq!(levels, vec![2]);
         assert_eq!(player.level(), 2);
+    }
+
+    #[test]
+    fn test_dodge() {
+        let mut player = PlayerCombatState::new();
+        assert!(!player.is_dodging);
+
+        // Should be able to dodge
+        assert!(player.try_dodge());
+        assert!(player.is_dodging);
+        assert!(player.invincibility_timer > 0.0);
+
+        // Can't dodge again while dodging
+        assert!(!player.try_dodge());
+
+        // Wait out dodge duration
+        let _ = player.update(0.5);
+        assert!(!player.is_dodging);
+
+        // Still on cooldown
+        assert!(!player.try_dodge());
+
+        // Wait out cooldown
+        let _ = player.update(1.5);
+        assert!(player.try_dodge());
+    }
+
+    #[test]
+    fn test_mana_regen_in_update() {
+        let mut player = PlayerCombatState::new();
+        player.stats.current_mana = 50.0;
+        let _ = player.update(1.0);
+        // Should have regenerated
+        assert!(player.stats.current_mana > 50.0);
     }
 }

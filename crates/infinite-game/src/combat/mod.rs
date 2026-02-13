@@ -24,5 +24,5 @@ pub use rune::{ComposedSpell, Rune, RuneAmplifier, RuneAspect, RuneComposer, Run
 pub use skill::{ActiveSkill, PassiveSkill, Skill, SkillId, SkillSlot, SkillShape, SkillTarget, MAX_SKILL_SLOTS};
 pub use status::{StatusEffect, StatusEffectType, StatusManager};
 pub use inventory::{Inventory, MAX_INVENTORY_SIZE};
-pub use starter_items::create_starter_items;
+pub use starter_items::{create_starter_items, create_starter_skills};
 pub use weapon::{WeaponData, WeaponGrip, WeaponRange, WeaponType};

@@ -22,6 +22,7 @@ pub enum InventoryAction {
     None,
     EquipItem { inventory_index: usize, slot: EquipmentSlot },
     UnequipItem { slot: EquipmentSlot },
+    UseItem { inventory_index: usize },
 }
 
 /// Inventory menu state
@@ -308,6 +309,16 @@ impl InventoryMenu {
                                     self.selected_item = None;
                                 }
                             }
+                        }
+
+                        // Use button for consumable items
+                        if item.category == ItemCategory::Consumable
+                            && inv_button(ui, "Use", Vec2::new(100.0, 28.0))
+                        {
+                            action = InventoryAction::UseItem {
+                                inventory_index: idx,
+                            };
+                            self.selected_item = None;
                         }
                     }
                 } else {

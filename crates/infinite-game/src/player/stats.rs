@@ -27,6 +27,23 @@ pub struct CharacterStats {
     /// Elemental affinity
     #[serde(default)]
     pub elemental_affinity: Element,
+    /// Maximum mana points
+    #[serde(default = "default_max_mana")]
+    pub max_mana: f32,
+    /// Current mana points
+    #[serde(default = "default_max_mana")]
+    pub current_mana: f32,
+    /// Mana regeneration per second
+    #[serde(default = "default_mana_regen")]
+    pub mana_regen: f32,
+}
+
+fn default_max_mana() -> f32 {
+    100.0
+}
+
+fn default_mana_regen() -> f32 {
+    2.0
 }
 
 impl Default for CharacterStats {
@@ -40,6 +57,9 @@ impl Default for CharacterStats {
             crit_chance: 0.05,
             crit_multiplier: 1.5,
             elemental_affinity: Element::Physical,
+            max_mana: 100.0,
+            current_mana: 100.0,
+            mana_regen: 2.0,
         }
     }
 }
@@ -56,6 +76,9 @@ impl CharacterStats {
             crit_chance: 0.05,
             crit_multiplier: 1.5,
             elemental_affinity: Element::Physical,
+            max_mana: 100.0,
+            current_mana: 100.0,
+            mana_regen: 2.0,
         }
     }
 
@@ -70,6 +93,9 @@ impl CharacterStats {
             crit_chance: (self.crit_chance + modifiers.crit_chance).clamp(0.0, 1.0),
             crit_multiplier: self.crit_multiplier + modifiers.crit_multiplier,
             elemental_affinity: self.elemental_affinity,
+            max_mana: self.max_mana,
+            current_mana: self.current_mana,
+            mana_regen: self.mana_regen,
         }
     }
 
@@ -110,8 +136,9 @@ impl CharacterStats {
         self.attack += growth.attack_per_level;
         self.defense += growth.defense_per_level;
         self.speed += growth.speed_per_level;
-        // Full heal on level up
+        // Full heal and mana restore on level up
         self.current_hp = self.max_hp;
+        self.current_mana = self.max_mana;
     }
 
     /// Heal by a percentage of max HP
@@ -123,6 +150,29 @@ impl CharacterStats {
     /// Heal by a flat amount
     pub fn heal(&mut self, amount: f32) {
         self.current_hp = (self.current_hp + amount).min(self.max_hp);
+    }
+
+    /// Try to spend mana. Returns false if insufficient.
+    pub fn use_mana(&mut self, cost: f32) -> bool {
+        if self.current_mana >= cost {
+            self.current_mana -= cost;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Regenerate mana passively each frame
+    pub fn regenerate_mana(&mut self, delta: f32) {
+        self.current_mana = (self.current_mana + self.mana_regen * delta).min(self.max_mana);
+    }
+
+    /// Mana as a 0.0-1.0 fraction
+    pub fn mana_fraction(&self) -> f32 {
+        if self.max_mana <= 0.0 {
+            return 0.0;
+        }
+        (self.current_mana / self.max_mana).clamp(0.0, 1.0)
     }
 }
 
@@ -359,5 +409,51 @@ mod tests {
 
         stats.heal_percent(0.25); // 25% of 100 = 25 HP
         assert_eq!(stats.current_hp, 75.0);
+    }
+
+    #[test]
+    fn test_mana_default() {
+        let stats = CharacterStats::default();
+        assert_eq!(stats.max_mana, 100.0);
+        assert_eq!(stats.current_mana, 100.0);
+        assert_eq!(stats.mana_regen, 2.0);
+        assert_eq!(stats.mana_fraction(), 1.0);
+    }
+
+    #[test]
+    fn test_use_mana() {
+        let mut stats = CharacterStats::default();
+        assert!(stats.use_mana(30.0));
+        assert_eq!(stats.current_mana, 70.0);
+
+        // Can't spend more than available
+        assert!(!stats.use_mana(80.0));
+        assert_eq!(stats.current_mana, 70.0);
+    }
+
+    #[test]
+    fn test_regenerate_mana() {
+        let mut stats = CharacterStats::default();
+        stats.current_mana = 50.0;
+
+        stats.regenerate_mana(1.0); // 2.0 per second
+        assert_eq!(stats.current_mana, 52.0);
+
+        // Should cap at max
+        stats.current_mana = 99.5;
+        stats.regenerate_mana(1.0);
+        assert_eq!(stats.current_mana, 100.0);
+    }
+
+    #[test]
+    fn test_mana_fraction() {
+        let mut stats = CharacterStats::default();
+        assert_eq!(stats.mana_fraction(), 1.0);
+
+        stats.current_mana = 50.0;
+        assert_eq!(stats.mana_fraction(), 0.5);
+
+        stats.current_mana = 0.0;
+        assert_eq!(stats.mana_fraction(), 0.0);
     }
 }

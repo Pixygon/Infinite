@@ -135,7 +135,7 @@ impl Archetype {
     /// Get base combat stats for this archetype at level 1
     pub fn base_stats(&self) -> CharacterStats {
         match self {
-            // Chronomancer: Balanced mage, moderate HP, high crit
+            // Chronomancer: Balanced mage, moderate HP, high crit, high mana
             Self::Chronomancer => CharacterStats {
                 max_hp: 80.0,
                 current_hp: 80.0,
@@ -145,8 +145,11 @@ impl Archetype {
                 crit_chance: 0.10,
                 crit_multiplier: 1.75,
                 elemental_affinity: self.starting_element(),
+                max_mana: 120.0,
+                current_mana: 120.0,
+                mana_regen: 2.5,
             },
-            // Temporal Hunter: Glass cannon, low HP, high damage/speed
+            // Temporal Hunter: Glass cannon, low HP, high damage/speed, low mana
             Self::TemporalHunter => CharacterStats {
                 max_hp: 70.0,
                 current_hp: 70.0,
@@ -156,8 +159,11 @@ impl Archetype {
                 crit_chance: 0.15,
                 crit_multiplier: 2.0,
                 elemental_affinity: self.starting_element(),
+                max_mana: 80.0,
+                current_mana: 80.0,
+                mana_regen: 1.5,
             },
-            // Vanguard: Tank, high HP/defense, lower damage
+            // Vanguard: Tank, high HP/defense, lower damage, low mana
             Self::Vanguard => CharacterStats {
                 max_hp: 120.0,
                 current_hp: 120.0,
@@ -167,8 +173,11 @@ impl Archetype {
                 crit_chance: 0.05,
                 crit_multiplier: 1.5,
                 elemental_affinity: self.starting_element(),
+                max_mana: 60.0,
+                current_mana: 60.0,
+                mana_regen: 1.0,
             },
-            // Technomage: Hybrid, moderate stats, high crit damage
+            // Technomage: Hybrid, moderate stats, high crit damage, highest mana
             Self::Technomage => CharacterStats {
                 max_hp: 85.0,
                 current_hp: 85.0,
@@ -178,6 +187,9 @@ impl Archetype {
                 crit_chance: 0.08,
                 crit_multiplier: 2.0,
                 elemental_affinity: self.starting_element(),
+                max_mana: 130.0,
+                current_mana: 130.0,
+                mana_regen: 3.0,
             },
             // Paradox Weaver: Unpredictable, balanced with very high crit chance
             Self::ParadoxWeaver => CharacterStats {
@@ -189,6 +201,9 @@ impl Archetype {
                 crit_chance: 0.20,
                 crit_multiplier: 1.6,
                 elemental_affinity: self.starting_element(),
+                max_mana: 100.0,
+                current_mana: 100.0,
+                mana_regen: 2.0,
             },
         }
     }

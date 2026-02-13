@@ -482,6 +482,11 @@ impl InfiniteApp {
                 for item in inv_items {
                     let _ = self.player_combat.inventory.add_item(item);
                 }
+
+                // Create starter skills for this archetype
+                self.player_combat.skill_slots = infinite_game::combat::starter_items::create_starter_skills(
+                    &format!("{:?}", archetype),
+                );
             } else {
                 self.player_combat = PlayerCombatState::new();
                 self.archetype_growth = None;
@@ -1206,82 +1211,222 @@ impl InfiniteApp {
                     }
                 }
 
-                // --- Player attack input ---
+                // --- Player attack input (light + heavy) ---
                 if let Some(camera) = &self.camera {
-                    if self.input_handler.state.is_just_pressed(InputAction::Attack) {
-                        if self.player_combat.try_attack() {
-                            // Find enemies in attack cone
-                            let attack_range = 2.5_f32;
-                            let attack_angle = 90.0_f32.to_radians();
-                            let player_forward = camera.forward();
-                            let player_forward_xz = Vec3::new(player_forward.x, 0.0, player_forward.z).normalize_or_zero();
+                    let attack_range = 2.5_f32;
+                    let attack_angle = 90.0_f32.to_radians();
+                    let player_forward = camera.forward();
+                    let player_forward_xz = Vec3::new(player_forward.x, 0.0, player_forward.z).normalize_or_zero();
 
-                            if let Some(npc_manager) = &mut self.npc_manager {
-                                // Collect enemies in range
-                                let enemies_in_range: Vec<(NpcId, Vec3, f32)> = npc_manager.npcs_iter()
-                                    .filter(|n| n.data.faction == infinite_game::NpcFaction::Hostile)
-                                    .filter_map(|n| {
-                                        let to_npc = n.position - player_pos;
-                                        let to_npc_xz = Vec3::new(to_npc.x, 0.0, to_npc.z);
-                                        let distance = to_npc_xz.length();
-                                        if distance < attack_range && distance > 0.01 {
-                                            let angle = player_forward_xz.dot(to_npc_xz.normalize());
-                                            if angle > (attack_angle / 2.0).cos() {
-                                                return Some((n.id, n.position, distance));
-                                            }
-                                        }
-                                        None
-                                    })
-                                    .collect();
+                    // Helper closure: find closest hostile NPC in attack cone
+                    let find_target = |npc_manager: &NpcManager, range: f32| -> Option<(NpcId, Vec3, f32)> {
+                        npc_manager.npcs_iter()
+                            .filter(|n| n.data.faction == infinite_game::NpcFaction::Hostile)
+                            .filter_map(|n| {
+                                let to_npc = n.position - player_pos;
+                                let to_npc_xz = Vec3::new(to_npc.x, 0.0, to_npc.z);
+                                let distance = to_npc_xz.length();
+                                if distance < range && distance > 0.01 {
+                                    let angle = player_forward_xz.dot(to_npc_xz.normalize());
+                                    if angle > (attack_angle / 2.0).cos() {
+                                        return Some((n.id, n.position, distance));
+                                    }
+                                }
+                                None
+                            })
+                            .min_by(|a, b| a.2.partial_cmp(&b.2).unwrap_or(std::cmp::Ordering::Equal))
+                    };
 
-                                // Damage closest enemy in cone
-                                if let Some((npc_id, npc_pos, _)) = enemies_in_range.into_iter()
-                                    .min_by(|a, b| a.2.partial_cmp(&b.2).unwrap_or(std::cmp::Ordering::Equal))
-                                {
+                    // Light attack (left click)
+                    if self.input_handler.state.is_just_pressed(InputAction::Attack)
+                        && self.player_combat.try_light_attack()
+                    {
+                        if let Some(npc_manager) = &mut self.npc_manager {
+                                if let Some((npc_id, npc_pos, _)) = find_target(npc_manager, attack_range) {
                                     let npc_defense = npc_manager.combat_stats.get(&npc_id)
-                                        .map(|s| s.defense)
-                                        .unwrap_or(0.0);
+                                        .map(|s| s.defense).unwrap_or(0.0);
+                                    let npc_element = npc_manager.combat_stats.get(&npc_id)
+                                        .map(|s| s.element).unwrap_or(infinite_game::combat::element::Element::Physical);
+                                    let npc_weakness = npc_manager.combat_stats.get(&npc_id)
+                                        .and_then(|s| s.weapon_weakness);
 
-                                    let (damage, is_crit) = self.player_combat.calculate_damage(npc_defense);
+                                    let event = self.player_combat.calculate_full_damage(
+                                        npc_defense, npc_element, npc_weakness,
+                                    );
                                     let defeated = npc_manager.damage_npc(
-                                        npc_id,
-                                        damage,
-                                        infinite_game::combat::element::Element::Physical,
-                                        infinite_game::combat::damage::AttackType::Light,
+                                        npc_id, event.final_amount, event.element, event.attack_type,
                                     );
 
-                                    // Add damage number
                                     self.damage_numbers.push(DamageNumber {
                                         position: npc_pos + Vec3::Y * 1.5,
-                                        amount: damage,
-                                        is_crit,
+                                        amount: event.final_amount,
+                                        is_crit: event.is_crit,
                                         timer: 1.0,
                                     });
 
                                     if defeated {
-                                        // Grant XP
                                         let npc_level = npc_manager.npc_level(npc_id);
                                         let xp = infinite_game::player::stats::xp_for_enemy(
-                                            npc_level,
-                                            infinite_game::player::stats::EnemyType::Normal,
+                                            npc_level, infinite_game::player::stats::EnemyType::Normal,
                                         );
                                         let levels_gained = self.player_combat.add_xp(xp);
-
-                                        // Handle level-ups
                                         for new_level in levels_gained {
                                             if let Some(growth) = &self.archetype_growth {
                                                 self.player_combat.apply_level_up(growth);
                                             }
                                             self.level_up_notification = Some((new_level, 3.0));
                                         }
-
-                                        // Show XP notification
                                         self.notification_text = Some(format!("+{} XP", xp));
                                         self.notification_timer = 1.5;
                                     }
                                 }
                             }
+                    }
+
+                    // Heavy attack (right click)
+                    if self.input_handler.state.is_just_pressed(InputAction::HeavyAttack) {
+                        self.player_combat.try_heavy_attack();
+                    }
+
+                    // Heavy attack damage: deal damage when windup completes
+                    if self.player_combat.active_attack_type == Some(infinite_game::combat::damage::AttackType::Heavy)
+                        && self.player_combat.heavy_attack_timer <= 0.0
+                        && self.player_combat.can_deal_damage()
+                    {
+                        if let Some(npc_manager) = &mut self.npc_manager {
+                            if let Some((npc_id, npc_pos, _)) = find_target(npc_manager, attack_range + 0.5) {
+                                let npc_defense = npc_manager.combat_stats.get(&npc_id)
+                                    .map(|s| s.defense).unwrap_or(0.0);
+                                let npc_element = npc_manager.combat_stats.get(&npc_id)
+                                    .map(|s| s.element).unwrap_or(infinite_game::combat::element::Element::Physical);
+                                let npc_weakness = npc_manager.combat_stats.get(&npc_id)
+                                    .and_then(|s| s.weapon_weakness);
+
+                                let event = self.player_combat.calculate_full_damage(
+                                    npc_defense, npc_element, npc_weakness,
+                                );
+                                let defeated = npc_manager.damage_npc(
+                                    npc_id, event.final_amount, event.element, event.attack_type,
+                                );
+
+                                self.damage_numbers.push(DamageNumber {
+                                    position: npc_pos + Vec3::Y * 1.5,
+                                    amount: event.final_amount,
+                                    is_crit: event.is_crit,
+                                    timer: 1.0,
+                                });
+
+                                if defeated {
+                                    let npc_level = npc_manager.npc_level(npc_id);
+                                    let xp = infinite_game::player::stats::xp_for_enemy(
+                                        npc_level, infinite_game::player::stats::EnemyType::Normal,
+                                    );
+                                    let levels_gained = self.player_combat.add_xp(xp);
+                                    for new_level in levels_gained {
+                                        if let Some(growth) = &self.archetype_growth {
+                                            self.player_combat.apply_level_up(growth);
+                                        }
+                                        self.level_up_notification = Some((new_level, 3.0));
+                                    }
+                                    self.notification_text = Some(format!("+{} XP", xp));
+                                    self.notification_timer = 1.5;
+                                }
+                            }
                         }
+                    }
+
+                    // --- Skill slots (1-4 keys) ---
+                    for (slot_idx, action) in [
+                        InputAction::Skill1, InputAction::Skill2,
+                        InputAction::Skill3, InputAction::Skill4,
+                    ].iter().enumerate() {
+                        if self.input_handler.state.is_just_pressed(*action) {
+                            // Check if skill exists and get its cost
+                            let skill_info = self.player_combat.skill_slots.get(slot_idx)
+                                .and_then(|slot| {
+                                    if let Some(infinite_game::combat::skill::Skill::Active(ref active)) = slot.skill {
+                                        Some((active.cost, active.base_damage * active.damage_multiplier, active.element))
+                                    } else {
+                                        None
+                                    }
+                                });
+
+                            if let Some((mana_cost, skill_damage, skill_element)) = skill_info {
+                                if self.player_combat.stats.current_mana >= mana_cost {
+                                    if self.player_combat.try_use_skill(slot_idx) {
+                                        self.player_combat.stats.use_mana(mana_cost);
+
+                                        // Apply skill damage to nearest enemy in range
+                                        let skill_range = 10.0_f32;
+                                        if let Some(npc_manager) = &mut self.npc_manager {
+                                            if let Some((npc_id, npc_pos, _)) = find_target(npc_manager, skill_range) {
+                                                let npc_defense = npc_manager.combat_stats.get(&npc_id)
+                                                    .map(|s| s.defense).unwrap_or(0.0);
+                                                let damage = (skill_damage - npc_defense * 0.5).max(1.0);
+                                                let defeated = npc_manager.damage_npc(
+                                                    npc_id, damage, skill_element,
+                                                    infinite_game::combat::damage::AttackType::Light,
+                                                );
+
+                                                self.damage_numbers.push(DamageNumber {
+                                                    position: npc_pos + Vec3::Y * 1.5,
+                                                    amount: damage,
+                                                    is_crit: false,
+                                                    timer: 1.0,
+                                                });
+
+                                                if defeated {
+                                                    let npc_level = npc_manager.npc_level(npc_id);
+                                                    let xp = infinite_game::player::stats::xp_for_enemy(
+                                                        npc_level, infinite_game::player::stats::EnemyType::Normal,
+                                                    );
+                                                    let levels_gained = self.player_combat.add_xp(xp);
+                                                    for new_level in levels_gained {
+                                                        if let Some(growth) = &self.archetype_growth {
+                                                            self.player_combat.apply_level_up(growth);
+                                                        }
+                                                        self.level_up_notification = Some((new_level, 3.0));
+                                                    }
+                                                    self.notification_text = Some(format!("+{} XP", xp));
+                                                    self.notification_timer = 1.5;
+                                                }
+                                            }
+                                        }
+                                    }
+                                } else {
+                                    self.notification_text = Some("Not enough mana!".to_string());
+                                    self.notification_timer = 1.0;
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // --- Dodge (Ctrl) ---
+                if self.input_handler.state.is_just_pressed(InputAction::Dodge)
+                    && self.player_combat.try_dodge()
+                {
+                    // Apply dodge velocity impulse
+                    if let Some(player) = &mut self.player {
+                        let dodge_speed = 15.0_f32;
+                        let move_dir = if let Some(camera) = &self.camera {
+                            let fwd = camera.forward();
+                            let right = camera.right();
+                            let mut dir = Vec3::ZERO;
+                            if self.input_handler.state.is_held(InputAction::MoveForward) { dir += fwd; }
+                            if self.input_handler.state.is_held(InputAction::MoveBackward) { dir -= fwd; }
+                            if self.input_handler.state.is_held(InputAction::MoveRight) { dir += right; }
+                            if self.input_handler.state.is_held(InputAction::MoveLeft) { dir -= right; }
+                            if dir.length_squared() > 0.01 {
+                                Vec3::new(dir.x, 0.0, dir.z).normalize()
+                            } else {
+                                // Dodge backward if stationary
+                                Vec3::new(-fwd.x, 0.0, -fwd.z).normalize_or_zero()
+                            }
+                        } else {
+                            Vec3::NEG_Z
+                        };
+                        player.character.apply_impulse(move_dir * dodge_speed);
                     }
                 }
 
@@ -1693,8 +1838,8 @@ impl InfiniteApp {
                                 // Player stats from combat system
                                 let hp = self.player_combat.current_hp();
                                 let max_hp = self.player_combat.max_hp();
-                                let mana = 60.0f32; // Mana system not yet implemented
-                                let max_mana = 100.0f32;
+                                let mana = self.player_combat.stats.current_mana;
+                                let max_mana = self.player_combat.stats.max_mana;
                                 let level = self.player_combat.level();
                                 let xp_fraction = self.player_combat.xp_fraction();
                                 let current_xp = self.player_combat.current_xp();
@@ -2147,7 +2292,7 @@ impl InfiniteApp {
                                         });
                                 }
 
-                                // --- Enemy Health Bars (floating above hostile NPCs) ---
+                                // --- Enemy Health Bars (floating above NPCs) ---
                                 if let (Some(npc_manager), Some(camera)) = (&self.npc_manager, &self.camera) {
                                     let screen_size = ctx.screen_rect().size();
                                     let aspect_ratio = screen_size.x / screen_size.y;
@@ -2155,36 +2300,63 @@ impl InfiniteApp {
                                     let mut projection_matrix = camera.projection_matrix(aspect_ratio, 60.0);
                                     projection_matrix.y_axis.y *= -1.0;
                                     let view_proj = projection_matrix * view_matrix;
+                                    let max_display_dist = 20.0_f32;
+                                    let player_pos = self.player.as_ref().map(|p| p.position()).unwrap_or(Vec3::ZERO);
 
                                     for npc in npc_manager.npcs_iter() {
-                                        if npc.data.faction != infinite_game::NpcFaction::Hostile {
+                                        let dist_to_player = (npc.position - player_pos).length();
+                                        if dist_to_player > max_display_dist {
                                             continue;
                                         }
-                                        if let Some(stats) = npc_manager.combat_stats.get(&npc.id) {
-                                            // Only show HP bar if damaged
-                                            if stats.current_hp < stats.max_hp {
-                                                let world_pos = npc.position + Vec3::Y * 2.0;
-                                                if let Some(screen_pos) = world_to_screen(world_pos, view_proj, screen_size) {
-                                                    let hp_frac = stats.hp_fraction();
-                                                    let bar_width = 60.0_f32;
-                                                    let bar_height = 8.0_f32;
 
-                                                    egui::Area::new(egui::Id::new(("enemy_hp", npc.id.0)))
-                                                        .fixed_pos([screen_pos.x - bar_width / 2.0, screen_pos.y])
-                                                        .show(&ctx, |ui| {
-                                                            let bg_rect = egui::Rect::from_min_size(
-                                                                ui.cursor().min,
-                                                                egui::vec2(bar_width, bar_height)
-                                                            );
-                                                            ui.painter().rect_filled(bg_rect, 2.0, egui::Color32::from_rgb(40, 40, 40));
-                                                            let hp_rect = egui::Rect::from_min_size(
-                                                                bg_rect.min,
-                                                                egui::vec2(bar_width * hp_frac, bar_height)
-                                                            );
-                                                            ui.painter().rect_filled(hp_rect, 2.0, egui::Color32::from_rgb(200, 50, 50));
-                                                            ui.allocate_space(egui::vec2(bar_width, bar_height));
-                                                        });
-                                                }
+                                        let is_hostile = npc.data.faction == infinite_game::NpcFaction::Hostile;
+                                        let is_damaged = npc_manager.combat_stats.get(&npc.id)
+                                            .map(|s| s.current_hp < s.max_hp)
+                                            .unwrap_or(false);
+                                        let in_aggro = is_hostile && dist_to_player < npc_manager.combat_stats.get(&npc.id)
+                                            .map(|s| s.aggro_radius).unwrap_or(12.0);
+
+                                        // Show bar if damaged OR hostile in aggro range
+                                        if !is_damaged && !in_aggro {
+                                            continue;
+                                        }
+
+                                        if let Some(stats) = npc_manager.combat_stats.get(&npc.id) {
+                                            let world_pos = npc.position + Vec3::Y * 2.0;
+                                            if let Some(screen_pos) = world_to_screen(world_pos, view_proj, screen_size) {
+                                                let hp_frac = stats.hp_fraction();
+                                                let bar_width = 70.0_f32;
+                                                let bar_height = 8.0_f32;
+
+                                                // Name color based on faction
+                                                let name_color = match npc.data.faction {
+                                                    infinite_game::NpcFaction::Hostile => egui::Color32::from_rgb(220, 80, 80),
+                                                    infinite_game::NpcFaction::Friendly => egui::Color32::from_rgb(80, 220, 80),
+                                                    _ => egui::Color32::from_rgb(200, 200, 200),
+                                                };
+
+                                                egui::Area::new(egui::Id::new(("enemy_hp", npc.id.0)))
+                                                    .fixed_pos([screen_pos.x - bar_width / 2.0, screen_pos.y - 14.0])
+                                                    .show(&ctx, |ui| {
+                                                        // NPC name
+                                                        ui.label(
+                                                            egui::RichText::new(&npc.data.name)
+                                                                .font(egui::FontId::proportional(10.0))
+                                                                .color(name_color),
+                                                        );
+                                                        // HP bar
+                                                        let bg_rect = egui::Rect::from_min_size(
+                                                            ui.cursor().min,
+                                                            egui::vec2(bar_width, bar_height)
+                                                        );
+                                                        ui.painter().rect_filled(bg_rect, 2.0, egui::Color32::from_rgb(40, 40, 40));
+                                                        let hp_rect = egui::Rect::from_min_size(
+                                                            bg_rect.min,
+                                                            egui::vec2(bar_width * hp_frac, bar_height)
+                                                        );
+                                                        ui.painter().rect_filled(hp_rect, 2.0, egui::Color32::from_rgb(200, 50, 50));
+                                                        ui.allocate_space(egui::vec2(bar_width, bar_height));
+                                                    });
                                             }
                                         }
                                     }
@@ -2383,6 +2555,109 @@ impl InfiniteApp {
                                         });
                                 }
 
+                                // --- Skill Bar HUD (bottom-center) ---
+                                {
+                                    let screen_rect = ctx.screen_rect();
+                                    let slot_size = 60.0_f32;
+                                    let slot_gap = 8.0_f32;
+                                    let num_slots = 4;
+                                    let total_width = (slot_size * num_slots as f32) + (slot_gap * (num_slots - 1) as f32);
+                                    let bar_x = (screen_rect.width() - total_width) / 2.0;
+                                    let bar_y = screen_rect.height() - slot_size - 20.0;
+
+                                    egui::Area::new(egui::Id::new("skill_bar"))
+                                        .fixed_pos([bar_x, bar_y])
+                                        .show(&ctx, |ui| {
+                                            ui.horizontal(|ui| {
+                                                let keybinds = ["1", "2", "3", "4"];
+                                                for (i, slot) in self.player_combat.skill_slots.iter().enumerate() {
+                                                    let slot_rect = ui.allocate_space(egui::vec2(slot_size, slot_size)).1;
+
+                                                    // Background
+                                                    ui.painter().rect_filled(
+                                                        slot_rect,
+                                                        4.0,
+                                                        egui::Color32::from_rgba_unmultiplied(20, 20, 35, 220),
+                                                    );
+                                                    ui.painter().rect_stroke(
+                                                        slot_rect,
+                                                        4.0,
+                                                        egui::Stroke::new(1.0, egui::Color32::from_rgb(60, 60, 90)),
+                                                        egui::epaint::StrokeKind::Outside,
+                                                    );
+
+                                                    if let Some(infinite_game::combat::skill::Skill::Active(ref active)) = slot.skill {
+                                                        // Skill name (abbreviated)
+                                                        let abbrev: String = active.name.chars().take(6).collect();
+                                                        ui.painter().text(
+                                                            slot_rect.center(),
+                                                            egui::Align2::CENTER_CENTER,
+                                                            &abbrev,
+                                                            egui::FontId::proportional(11.0),
+                                                            egui::Color32::from_rgb(220, 220, 240),
+                                                        );
+
+                                                        // Cooldown overlay
+                                                        if slot.is_on_cooldown() {
+                                                            let cd_frac = 1.0 - slot.cooldown_fraction();
+                                                            let cd_rect = egui::Rect::from_min_size(
+                                                                slot_rect.min,
+                                                                egui::vec2(slot_size, slot_size * cd_frac),
+                                                            );
+                                                            ui.painter().rect_filled(
+                                                                cd_rect,
+                                                                4.0,
+                                                                egui::Color32::from_rgba_unmultiplied(0, 0, 0, 150),
+                                                            );
+                                                            // Show remaining seconds
+                                                            ui.painter().text(
+                                                                slot_rect.center() + egui::vec2(0.0, 12.0),
+                                                                egui::Align2::CENTER_CENTER,
+                                                                format!("{:.1}s", slot.cooldown_remaining),
+                                                                egui::FontId::proportional(10.0),
+                                                                egui::Color32::from_rgb(255, 200, 100),
+                                                            );
+                                                        }
+
+                                                        // Mana cost below
+                                                        ui.painter().text(
+                                                            egui::pos2(slot_rect.center().x, slot_rect.max.y - 3.0),
+                                                            egui::Align2::CENTER_BOTTOM,
+                                                            format!("{:.0}", active.cost),
+                                                            egui::FontId::proportional(9.0),
+                                                            egui::Color32::from_rgb(80, 140, 220),
+                                                        );
+                                                    } else {
+                                                        // Empty slot
+                                                        ui.painter().text(
+                                                            slot_rect.center(),
+                                                            egui::Align2::CENTER_CENTER,
+                                                            "[Empty]",
+                                                            egui::FontId::proportional(10.0),
+                                                            egui::Color32::from_rgb(80, 80, 100),
+                                                        );
+                                                    }
+
+                                                    // Keybind label in top-left corner
+                                                    if i < keybinds.len() {
+                                                        ui.painter().text(
+                                                            slot_rect.min + egui::vec2(4.0, 2.0),
+                                                            egui::Align2::LEFT_TOP,
+                                                            keybinds[i],
+                                                            egui::FontId::proportional(10.0),
+                                                            egui::Color32::from_rgb(160, 160, 180),
+                                                        );
+                                                    }
+
+                                                    // Gap between slots
+                                                    if i < num_slots - 1 {
+                                                        ui.add_space(slot_gap);
+                                                    }
+                                                }
+                                            });
+                                        });
+                                }
+
                                 // --- Inventory overlay ---
                                 if self.show_inventory {
                                     let (inv_transition, inv_action) = self.inventory_menu.render(
@@ -2499,6 +2774,24 @@ impl InfiniteApp {
                     if self.player_combat.inventory.add_item(item).is_err() {
                         self.notification_text = Some("Inventory full!".to_string());
                         self.notification_timer = 2.0;
+                    }
+                }
+            }
+            InventoryAction::UseItem { inventory_index } => {
+                if let Some(item) = self.player_combat.inventory.get(inventory_index) {
+                    let item_name = item.name.clone();
+                    let is_health_potion = item_name.to_lowercase().contains("health");
+
+                    if is_health_potion {
+                        self.player_combat.stats.heal(30.0);
+                        self.player_combat.inventory.remove_item_stack(inventory_index, 1);
+                        self.notification_text = Some(format!("Used {}", item_name));
+                        self.notification_timer = 1.5;
+                        // Green healing flash (re-use damage flash with positive indicator)
+                        self.player_combat.damage_flash_timer = 0.3;
+                    } else {
+                        self.notification_text = Some("Cannot use this item.".to_string());
+                        self.notification_timer = 1.5;
                     }
                 }
             }
