@@ -6,6 +6,8 @@ pub mod error;
 pub mod types;
 pub mod auth;
 pub mod character;
+pub mod character_item;
+pub mod game_story;
 pub mod ai_chat;
 pub mod client;
 

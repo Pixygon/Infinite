@@ -9,6 +9,7 @@ pub mod equipment;
 pub mod gem;
 pub mod inventory;
 pub mod item;
+pub mod item_conversion;
 pub mod rune;
 pub mod skill;
 pub mod starter_items;

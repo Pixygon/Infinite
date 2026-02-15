@@ -86,6 +86,18 @@ impl AuthManager {
         self.token.read().ok().map(|t| t.is_some()).unwrap_or(false)
     }
 
+    /// Whether the current user is an admin or superadmin
+    pub fn is_admin(&self) -> bool {
+        self.user.read().ok()
+            .and_then(|u| u.as_ref().map(|u| u.role == "admin" || u.role == "superadmin"))
+            .unwrap_or(false)
+    }
+
+    /// Get the current user's display name
+    pub fn user_name(&self) -> Option<String> {
+        self.user.read().ok()?.as_ref().map(|u| u.user_name.clone())
+    }
+
     /// Clear all auth state
     pub fn logout(&self) {
         if let Ok(mut t) = self.token.write() {

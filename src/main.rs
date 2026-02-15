@@ -90,7 +90,7 @@ use crate::character::CharacterData;
 use crate::save::{SaveData, PlayerSaveData, WorldSaveData};
 use crate::settings::GameSettings;
 use crate::state::{ApplicationState, StateTransition};
-use crate::ui::{CharacterCreator, InventoryAction, InventoryMenu, LoadingScreen, MainMenu, PauseMenu, SaveLoadAction, SaveLoadMenu, SettingsMenu};
+use crate::ui::{AdminPanel, CharacterCreator, InventoryAction, InventoryMenu, LoadingScreen, LoginMenu, MainMenu, PauseMenu, SaveLoadAction, SaveLoadMenu, SettingsMenu};
 use std::collections::HashMap;
 
 /// Mesh buffers for GPU rendering
@@ -186,8 +186,12 @@ struct InfiniteApp {
     settings_menu: Option<SettingsMenu>,
     /// Save/Load menu UI (created when needed)
     save_load_menu: Option<SaveLoadMenu>,
+    /// Login menu UI
+    login_menu: LoginMenu,
     /// Character creator UI
     character_creator: CharacterCreator,
+    /// Admin panel (created when needed, admin-only)
+    admin_panel: Option<AdminPanel>,
     /// Current character (when playing)
     current_character: Option<CharacterData>,
     /// Simulated loading timer
@@ -307,7 +311,9 @@ impl InfiniteApp {
             pause_menu: PauseMenu::new(),
             settings_menu: None,
             save_load_menu: None,
+            login_menu: LoginMenu::new(),
             character_creator: CharacterCreator::new(),
+            admin_panel: None,
             current_character: None,
             loading_timer: 0.0,
             physics_world: None,
@@ -938,8 +944,12 @@ impl InfiniteApp {
                     if let Some(next_phase) = phase.next() {
                         self.app_state = ApplicationState::Loading(next_phase);
                     } else {
-                        // Loading complete, go to main menu
-                        self.app_state = ApplicationState::MainMenu;
+                        // Loading complete — go to login screen (or main menu if offline)
+                        if self.integration_client.is_some() {
+                            self.app_state = ApplicationState::Login;
+                        } else {
+                            self.app_state = ApplicationState::MainMenu;
+                        }
                         info!(
                             "Loading complete - Year: {}",
                             self.timeline.year_label()
@@ -1715,6 +1725,10 @@ impl InfiniteApp {
                     self.current_character = None;
                     self.save_load_menu = None;
                 }
+                // Cleanup admin panel when leaving
+                if matches!(old_state, ApplicationState::AdminTools) {
+                    self.admin_panel = None;
+                }
             }
             _ => {}
         }
@@ -1802,7 +1816,16 @@ impl InfiniteApp {
                                 self.loading_screen.render(ui, phase);
                                 StateTransition::None
                             }
-                            ApplicationState::MainMenu => self.main_menu.render(ui),
+                            ApplicationState::Login => {
+                                self.login_menu.render(ui, self.integration_client.as_ref())
+                            }
+                            ApplicationState::MainMenu => {
+                                let is_admin = self.integration_client.as_ref()
+                                    .map(|c| c.is_admin()).unwrap_or(false);
+                                let user_name = self.integration_client.as_ref()
+                                    .and_then(|c| c.user_name());
+                                self.main_menu.render(ui, is_admin, user_name.as_deref())
+                            }
                             ApplicationState::CharacterCreation => {
                                 self.character_creator.render(ui)
                             }
@@ -2859,6 +2882,16 @@ impl InfiniteApp {
 
                                 StateTransition::None
                             }
+                            ApplicationState::AdminTools => {
+                                if self.admin_panel.is_none() {
+                                    self.admin_panel = Some(AdminPanel::new());
+                                }
+                                if let Some(panel) = &mut self.admin_panel {
+                                    panel.render(ui, self.integration_client.as_ref())
+                                } else {
+                                    StateTransition::None
+                                }
+                            }
                             ApplicationState::Exiting => StateTransition::None,
                         };
 
@@ -3747,7 +3780,7 @@ impl ApplicationHandler for InfiniteApp {
                             self.save_load_menu = None;
                             self.apply_transition(StateTransition::Pop);
                         }
-                        ApplicationState::CharacterCreation => {
+                        ApplicationState::CharacterCreation | ApplicationState::AdminTools => {
                             self.apply_transition(StateTransition::Replace(
                                 ApplicationState::MainMenu,
                             ));

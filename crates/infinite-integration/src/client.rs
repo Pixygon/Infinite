@@ -7,6 +7,8 @@ use reqwest::Client;
 use crate::auth::AuthManager;
 use crate::ai_chat::AiChatApi;
 use crate::character::CharacterApi;
+use crate::character_item::CharacterItemApi;
+use crate::game_story::GameStoryApi;
 use crate::error::IntegrationError;
 use crate::types::*;
 
@@ -34,6 +36,8 @@ pub struct IntegrationClient {
     runtime: tokio::runtime::Runtime,
     auth: Arc<AuthManager>,
     character_api: Arc<CharacterApi>,
+    character_item_api: Arc<CharacterItemApi>,
+    game_story_api: Arc<GameStoryApi>,
     ai_chat_api: Arc<AiChatApi>,
     online: Arc<std::sync::atomic::AtomicBool>,
 }
@@ -54,12 +58,16 @@ impl IntegrationClient {
 
         let auth = Arc::new(AuthManager::new(client.clone()));
         let character_api = Arc::new(CharacterApi::new(client.clone()));
+        let character_item_api = Arc::new(CharacterItemApi::new(client.clone()));
+        let game_story_api = Arc::new(GameStoryApi::new(client.clone()));
         let ai_chat_api = Arc::new(AiChatApi::new(client));
 
         Ok(Self {
             runtime,
             auth,
             character_api,
+            character_item_api,
+            game_story_api,
             ai_chat_api,
             online: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         })
@@ -139,6 +147,130 @@ impl IntegrationClient {
         PendingRequest { receiver: rx }
     }
 
+    // ============================================
+    // CharacterItem API wrappers
+    // ============================================
+
+    /// List all items for the project.
+    pub fn list_project_items(&self) -> PendingRequest<Vec<ServerCharacterItem>> {
+        let (tx, rx) = mpsc::channel();
+        let auth = Arc::clone(&self.auth);
+        let api = Arc::clone(&self.character_item_api);
+
+        self.runtime.spawn(async move {
+            let result = api.list_project_items(&auth).await;
+            let _ = tx.send(result);
+        });
+
+        PendingRequest { receiver: rx }
+    }
+
+    /// Create a new item on the server.
+    pub fn create_item(&self, item: ServerCharacterItem) -> PendingRequest<ServerCharacterItem> {
+        let (tx, rx) = mpsc::channel();
+        let auth = Arc::clone(&self.auth);
+        let api = Arc::clone(&self.character_item_api);
+
+        self.runtime.spawn(async move {
+            let result = api.create_item(&auth, item).await;
+            let _ = tx.send(result);
+        });
+
+        PendingRequest { receiver: rx }
+    }
+
+    /// Update an existing item on the server.
+    pub fn update_item(&self, item_id: &str, updates: ServerCharacterItem) -> PendingRequest<ServerCharacterItem> {
+        let (tx, rx) = mpsc::channel();
+        let auth = Arc::clone(&self.auth);
+        let api = Arc::clone(&self.character_item_api);
+        let item_id = item_id.to_string();
+
+        self.runtime.spawn(async move {
+            let result = api.update_item(&auth, &item_id, updates).await;
+            let _ = tx.send(result);
+        });
+
+        PendingRequest { receiver: rx }
+    }
+
+    /// Delete an item from the server.
+    pub fn delete_item(&self, item_id: &str) -> PendingRequest<serde_json::Value> {
+        let (tx, rx) = mpsc::channel();
+        let auth = Arc::clone(&self.auth);
+        let api = Arc::clone(&self.character_item_api);
+        let item_id = item_id.to_string();
+
+        self.runtime.spawn(async move {
+            let result = api.delete_item(&auth, &item_id).await;
+            let _ = tx.send(result);
+        });
+
+        PendingRequest { receiver: rx }
+    }
+
+    // ============================================
+    // GameStory API wrappers
+    // ============================================
+
+    /// List all stories for the project.
+    pub fn list_stories(&self) -> PendingRequest<Vec<ServerGameStory>> {
+        let (tx, rx) = mpsc::channel();
+        let auth = Arc::clone(&self.auth);
+        let api = Arc::clone(&self.game_story_api);
+
+        self.runtime.spawn(async move {
+            let result = api.list_stories(&auth).await;
+            let _ = tx.send(result);
+        });
+
+        PendingRequest { receiver: rx }
+    }
+
+    /// Create a new story on the server.
+    pub fn create_story(&self, story: ServerGameStory) -> PendingRequest<ServerGameStory> {
+        let (tx, rx) = mpsc::channel();
+        let auth = Arc::clone(&self.auth);
+        let api = Arc::clone(&self.game_story_api);
+
+        self.runtime.spawn(async move {
+            let result = api.create_story(&auth, story).await;
+            let _ = tx.send(result);
+        });
+
+        PendingRequest { receiver: rx }
+    }
+
+    /// Update a story on the server.
+    pub fn update_story(&self, story_id: &str, updates: ServerGameStory) -> PendingRequest<ServerGameStory> {
+        let (tx, rx) = mpsc::channel();
+        let auth = Arc::clone(&self.auth);
+        let api = Arc::clone(&self.game_story_api);
+        let story_id = story_id.to_string();
+
+        self.runtime.spawn(async move {
+            let result = api.update_story(&auth, &story_id, updates).await;
+            let _ = tx.send(result);
+        });
+
+        PendingRequest { receiver: rx }
+    }
+
+    /// Delete a story from the server.
+    pub fn delete_story(&self, story_id: &str) -> PendingRequest<serde_json::Value> {
+        let (tx, rx) = mpsc::channel();
+        let auth = Arc::clone(&self.auth);
+        let api = Arc::clone(&self.game_story_api);
+        let story_id = story_id.to_string();
+
+        self.runtime.spawn(async move {
+            let result = api.delete_story(&auth, &story_id).await;
+            let _ = tx.send(result);
+        });
+
+        PendingRequest { receiver: rx }
+    }
+
     /// Whether the server appears to be online (based on last request result).
     pub fn is_online(&self) -> bool {
         self.online.load(std::sync::atomic::Ordering::Relaxed)
@@ -147,6 +279,26 @@ impl IntegrationClient {
     /// Whether the client has valid authentication.
     pub fn is_authenticated(&self) -> bool {
         self.auth.is_authenticated()
+    }
+
+    /// Whether the current user is an admin or superadmin.
+    pub fn is_admin(&self) -> bool {
+        self.auth.is_admin()
+    }
+
+    /// Get the current user's display name.
+    pub fn user_name(&self) -> Option<String> {
+        self.auth.user_name()
+    }
+
+    /// Get a reference to the auth manager (for API calls).
+    pub fn auth(&self) -> &Arc<AuthManager> {
+        &self.auth
+    }
+
+    /// Get a handle to the tokio runtime (for spawning API calls).
+    pub fn runtime(&self) -> &tokio::runtime::Runtime {
+        &self.runtime
     }
 }
 

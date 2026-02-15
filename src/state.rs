@@ -7,8 +7,12 @@
 pub enum ApplicationState {
     /// Loading screen with progress phases
     Loading(LoadingPhase),
+    /// Login screen (requires Pixygon account)
+    Login,
     /// Main menu (title screen)
     MainMenu,
+    /// Admin tools panel (items, stories)
+    AdminTools,
     /// Character creation screen
     CharacterCreation,
     /// Settings menu with return target

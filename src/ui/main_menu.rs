@@ -21,8 +21,10 @@ impl MainMenu {
         self.has_save = has_save;
     }
 
-    /// Render the main menu and return any state transition
-    pub fn render(&self, ui: &mut Ui) -> StateTransition {
+    /// Render the main menu and return any state transition.
+    /// `is_admin` controls whether the Admin Tools button is shown.
+    /// `user_name` is shown as a greeting if logged in.
+    pub fn render(&self, ui: &mut Ui, is_admin: bool, user_name: Option<&str>) -> StateTransition {
         let mut transition = StateTransition::None;
         let available = ui.available_size();
 
@@ -68,13 +70,21 @@ impl MainMenu {
 
                 ui.add_space(10.0);
 
+                // Admin Tools (only for admins)
+                if is_admin {
+                    if menu_button(ui, "Admin Tools", button_size) {
+                        transition = StateTransition::Replace(ApplicationState::AdminTools);
+                    }
+                    ui.add_space(10.0);
+                }
+
                 // Quit
                 if menu_button(ui, "Quit", button_size) {
                     transition = StateTransition::Replace(ApplicationState::Exiting);
                 }
             });
 
-            // Version info at bottom
+            // Version info and user at bottom
             ui.with_layout(Layout::bottom_up(Align::Center), |ui| {
                 ui.add_space(20.0);
                 ui.label(
@@ -82,6 +92,13 @@ impl MainMenu {
                         .font(FontId::proportional(12.0))
                         .color(Color32::from_rgb(100, 100, 120)),
                 );
+                if let Some(name) = user_name {
+                    ui.label(
+                        RichText::new(format!("Logged in as {}", name))
+                            .font(FontId::proportional(12.0))
+                            .color(Color32::from_rgb(120, 140, 120)),
+                    );
+                }
             });
         });
 
