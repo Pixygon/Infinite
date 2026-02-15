@@ -1954,6 +1954,87 @@ impl InfiniteApp {
                                             });
                                     });
 
+                                // Status effects row (below player stats)
+                                if !self.player_combat.status_manager.effects.is_empty() {
+                                    egui::Area::new(egui::Id::new("status_effects"))
+                                        .fixed_pos([10.0, 170.0])
+                                        .show(&ctx, |ui| {
+                                            ui.horizontal(|ui| {
+                                                for effect in &self.player_combat.status_manager.effects {
+                                                    let box_size = egui::vec2(28.0, 28.0);
+                                                    let (rect, _) = ui.allocate_exact_size(box_size, egui::Sense::hover());
+
+                                                    // Background color from element or hardcoded for non-elemental
+                                                    let bg_color = if let Some(elem) = effect.effect_type.element() {
+                                                        let c = elem.color();
+                                                        egui::Color32::from_rgba_unmultiplied(
+                                                            (c[0] * 180.0) as u8,
+                                                            (c[1] * 180.0) as u8,
+                                                            (c[2] * 180.0) as u8,
+                                                            200,
+                                                        )
+                                                    } else {
+                                                        match effect.effect_type {
+                                                            infinite_game::StatusEffectType::Poisoned => egui::Color32::from_rgba_unmultiplied(80, 160, 40, 200),
+                                                            infinite_game::StatusEffectType::Stunned => egui::Color32::from_rgba_unmultiplied(200, 200, 50, 200),
+                                                            infinite_game::StatusEffectType::Slowed => egui::Color32::from_rgba_unmultiplied(100, 100, 150, 200),
+                                                            infinite_game::StatusEffectType::Weakened => egui::Color32::from_rgba_unmultiplied(150, 80, 80, 200),
+                                                            infinite_game::StatusEffectType::Empowered => egui::Color32::from_rgba_unmultiplied(220, 180, 50, 200),
+                                                            infinite_game::StatusEffectType::Hastened => egui::Color32::from_rgba_unmultiplied(50, 200, 180, 200),
+                                                            infinite_game::StatusEffectType::Shielded => egui::Color32::from_rgba_unmultiplied(180, 180, 220, 200),
+                                                            _ => egui::Color32::from_rgba_unmultiplied(120, 120, 120, 200),
+                                                        }
+                                                    };
+
+                                                    ui.painter().rect_filled(rect, 3.0, bg_color);
+                                                    ui.painter().rect_stroke(
+                                                        rect,
+                                                        3.0,
+                                                        egui::Stroke::new(1.0, egui::Color32::from_rgb(40, 40, 40)),
+                                                        egui::epaint::StrokeKind::Outside,
+                                                    );
+
+                                                    // 3-letter abbreviation
+                                                    let abbrev: String = effect.effect_type.name().chars().take(3).collect::<String>().to_uppercase();
+                                                    ui.painter().text(
+                                                        rect.center() - egui::vec2(0.0, 3.0),
+                                                        egui::Align2::CENTER_CENTER,
+                                                        &abbrev,
+                                                        egui::FontId::proportional(9.0),
+                                                        egui::Color32::WHITE,
+                                                    );
+
+                                                    // Duration countdown
+                                                    ui.painter().text(
+                                                        egui::pos2(rect.center().x, rect.max.y - 2.0),
+                                                        egui::Align2::CENTER_BOTTOM,
+                                                        format!("{:.0}", effect.duration),
+                                                        egui::FontId::proportional(8.0),
+                                                        egui::Color32::from_rgb(180, 180, 180),
+                                                    );
+
+                                                    // Shield HP bar for Shielded effect
+                                                    if effect.effect_type == infinite_game::StatusEffectType::Shielded
+                                                        && effect.shield_hp_max > 0.0
+                                                    {
+                                                        let bar_rect = egui::Rect::from_min_size(
+                                                            egui::pos2(rect.min.x, rect.max.y + 1.0),
+                                                            egui::vec2(28.0, 3.0),
+                                                        );
+                                                        ui.painter().rect_filled(bar_rect, 1.0, egui::Color32::from_rgb(40, 40, 60));
+                                                        let fill_rect = egui::Rect::from_min_size(
+                                                            bar_rect.min,
+                                                            egui::vec2(28.0 * (effect.shield_hp / effect.shield_hp_max), 3.0),
+                                                        );
+                                                        ui.painter().rect_filled(fill_rect, 1.0, egui::Color32::from_rgb(100, 160, 240));
+                                                    }
+
+                                                    ui.add_space(2.0);
+                                                }
+                                            });
+                                        });
+                                }
+
                                 // Top-right: Time of day + Weather
                                 egui::Area::new(egui::Id::new("time_weather"))
                                     .anchor(egui::Align2::RIGHT_TOP, [-10.0, 10.0])
@@ -2356,6 +2437,37 @@ impl InfiniteApp {
                                                         );
                                                         ui.painter().rect_filled(hp_rect, 2.0, egui::Color32::from_rgb(200, 50, 50));
                                                         ui.allocate_space(egui::vec2(bar_width, bar_height));
+
+                                                        // Level and element info
+                                                        let npc_level = npc_manager.npc_level(npc.id);
+                                                        if stats.element != infinite_game::Element::Physical {
+                                                            let elem_c = stats.element.color();
+                                                            let elem_color = egui::Color32::from_rgb(
+                                                                (elem_c[0] * 255.0) as u8,
+                                                                (elem_c[1] * 255.0) as u8,
+                                                                (elem_c[2] * 255.0) as u8,
+                                                            );
+                                                            ui.label(
+                                                                egui::RichText::new(format!("Lv.{} {}", npc_level, stats.element.name()))
+                                                                    .font(egui::FontId::proportional(9.0))
+                                                                    .color(elem_color),
+                                                            );
+                                                        } else {
+                                                            ui.label(
+                                                                egui::RichText::new(format!("Lv.{}", npc_level))
+                                                                    .font(egui::FontId::proportional(9.0))
+                                                                    .color(egui::Color32::from_rgb(160, 160, 160)),
+                                                            );
+                                                        }
+
+                                                        // Weapon weakness hint
+                                                        if let Some(weakness) = &stats.weapon_weakness {
+                                                            ui.label(
+                                                                egui::RichText::new(format!("Weak: {}", weakness.name()))
+                                                                    .font(egui::FontId::proportional(8.0))
+                                                                    .color(egui::Color32::from_rgb(220, 180, 80)),
+                                                            );
+                                                        }
                                                     });
                                             }
                                         }
@@ -2655,6 +2767,79 @@ impl InfiniteApp {
                                                     }
                                                 }
                                             });
+                                        });
+
+                                    // Dodge cooldown indicator (to the right of skill bar)
+                                    egui::Area::new(egui::Id::new("dodge_indicator"))
+                                        .fixed_pos([bar_x + total_width + 10.0, bar_y + 10.0])
+                                        .show(&ctx, |ui| {
+                                            let dodge_rect = ui.allocate_space(egui::vec2(70.0, 40.0)).1;
+
+                                            // Dark background
+                                            ui.painter().rect_filled(
+                                                dodge_rect,
+                                                4.0,
+                                                egui::Color32::from_rgba_unmultiplied(20, 20, 35, 220),
+                                            );
+                                            ui.painter().rect_stroke(
+                                                dodge_rect,
+                                                4.0,
+                                                egui::Stroke::new(1.0, egui::Color32::from_rgb(60, 60, 90)),
+                                                egui::epaint::StrokeKind::Outside,
+                                            );
+
+                                            if self.player_combat.is_dodging {
+                                                // Active: cyan highlight
+                                                ui.painter().text(
+                                                    dodge_rect.center(),
+                                                    egui::Align2::CENTER_CENTER,
+                                                    "DODGE",
+                                                    egui::FontId::proportional(13.0),
+                                                    egui::Color32::from_rgb(0, 220, 220),
+                                                );
+                                            } else if self.player_combat.dodge_cooldown_timer > 0.0 {
+                                                // On cooldown: dark overlay + countdown
+                                                let cd_frac = self.player_combat.dodge_cooldown_timer / self.player_combat.dodge_cooldown;
+                                                let overlay_rect = egui::Rect::from_min_size(
+                                                    dodge_rect.min,
+                                                    egui::vec2(70.0, 40.0 * cd_frac),
+                                                );
+                                                ui.painter().rect_filled(
+                                                    overlay_rect,
+                                                    4.0,
+                                                    egui::Color32::from_rgba_unmultiplied(0, 0, 0, 150),
+                                                );
+                                                ui.painter().text(
+                                                    dodge_rect.center() - egui::vec2(0.0, 4.0),
+                                                    egui::Align2::CENTER_CENTER,
+                                                    format!("{:.1}", self.player_combat.dodge_cooldown_timer),
+                                                    egui::FontId::proportional(13.0),
+                                                    egui::Color32::from_rgb(255, 180, 80),
+                                                );
+                                                ui.painter().text(
+                                                    egui::pos2(dodge_rect.center().x, dodge_rect.max.y - 4.0),
+                                                    egui::Align2::CENTER_BOTTOM,
+                                                    "Ctrl",
+                                                    egui::FontId::proportional(9.0),
+                                                    egui::Color32::from_rgb(120, 120, 140),
+                                                );
+                                            } else {
+                                                // Ready: green text
+                                                ui.painter().text(
+                                                    dodge_rect.center() - egui::vec2(0.0, 4.0),
+                                                    egui::Align2::CENTER_CENTER,
+                                                    "DODGE",
+                                                    egui::FontId::proportional(13.0),
+                                                    egui::Color32::from_rgb(80, 220, 80),
+                                                );
+                                                ui.painter().text(
+                                                    egui::pos2(dodge_rect.center().x, dodge_rect.max.y - 4.0),
+                                                    egui::Align2::CENTER_BOTTOM,
+                                                    "Ctrl",
+                                                    egui::FontId::proportional(9.0),
+                                                    egui::Color32::from_rgb(120, 120, 140),
+                                                );
+                                            }
                                         });
                                 }
 

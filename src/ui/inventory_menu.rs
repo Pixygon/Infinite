@@ -5,6 +5,7 @@ use egui::{Color32, FontId, RichText, ScrollArea, Ui, Vec2};
 use infinite_game::combat::equipment::{EquipmentSet, EquipmentSlot};
 use infinite_game::combat::inventory::Inventory;
 use infinite_game::combat::item::{Item, ItemCategory, ItemRarity};
+use infinite_game::Element;
 use infinite_game::player::stats::CharacterStats;
 
 use crate::state::StateTransition;
@@ -14,6 +15,7 @@ use crate::state::StateTransition;
 pub enum InventoryTab {
     Equipment,
     Inventory,
+    Stats,
 }
 
 /// Action to perform after rendering the inventory
@@ -93,6 +95,12 @@ impl InventoryMenu {
                     self.selected_item = None;
                     self.selected_slot = None;
                 }
+                ui.add_space(10.0);
+                if tab_button(ui, "Stats", self.active_tab == InventoryTab::Stats) {
+                    self.active_tab = InventoryTab::Stats;
+                    self.selected_item = None;
+                    self.selected_slot = None;
+                }
             });
 
             ui.add_space(15.0);
@@ -108,6 +116,9 @@ impl InventoryMenu {
                     }
                     InventoryTab::Inventory => {
                         action = self.render_inventory_tab(ui, equipment, inventory, stats);
+                    }
+                    InventoryTab::Stats => {
+                        self.render_stats_tab(ui, equipment, stats);
                     }
                 }
             });
@@ -239,10 +250,94 @@ impl InventoryMenu {
         action
     }
 
+    fn render_stats_tab(
+        &self,
+        ui: &mut Ui,
+        equipment: &EquipmentSet,
+        stats: &CharacterStats,
+    ) {
+        let equip_mods = equipment.total_modifiers();
+        let effective = stats.effective_stats(&equip_mods);
+
+        ui.horizontal(|ui| {
+            // Column 1: Base Stats
+            ui.vertical(|ui| {
+                ui.set_min_width(160.0);
+                ui.label(
+                    RichText::new("Base Stats")
+                        .font(FontId::proportional(16.0))
+                        .color(Color32::from_rgb(200, 200, 255)),
+                );
+                ui.add_space(8.0);
+                stat_display_line(ui, "Max HP", stats.max_hp, Color32::from_rgb(200, 200, 220));
+                stat_display_line(ui, "Attack", stats.attack, Color32::from_rgb(200, 200, 220));
+                stat_display_line(ui, "Defense", stats.defense, Color32::from_rgb(200, 200, 220));
+                stat_display_line(ui, "Speed", stats.speed, Color32::from_rgb(200, 200, 220));
+                stat_display_line(ui, "Crit %", stats.crit_chance * 100.0, Color32::from_rgb(200, 200, 220));
+                stat_display_line(ui, "Crit x", stats.crit_multiplier, Color32::from_rgb(200, 200, 220));
+                stat_display_line(ui, "Max Mana", stats.max_mana, Color32::from_rgb(200, 200, 220));
+                stat_display_line(ui, "Mana Regen", stats.mana_regen, Color32::from_rgb(200, 200, 220));
+                if stats.elemental_affinity != Element::Physical {
+                    let elem_c = stats.elemental_affinity.color();
+                    let elem_color = Color32::from_rgb(
+                        (elem_c[0] * 255.0) as u8,
+                        (elem_c[1] * 255.0) as u8,
+                        (elem_c[2] * 255.0) as u8,
+                    );
+                    ui.label(
+                        RichText::new(format!("Element: {}", stats.elemental_affinity.name()))
+                            .font(FontId::proportional(12.0))
+                            .color(elem_color),
+                    );
+                }
+            });
+
+            ui.add_space(20.0);
+
+            // Column 2: Equipment Bonuses
+            ui.vertical(|ui| {
+                ui.set_min_width(160.0);
+                ui.label(
+                    RichText::new("Equipment")
+                        .font(FontId::proportional(16.0))
+                        .color(Color32::from_rgb(100, 220, 100)),
+                );
+                ui.add_space(8.0);
+                stat_bonus_line(ui, "Max HP", equip_mods.max_hp);
+                stat_bonus_line(ui, "Attack", equip_mods.attack);
+                stat_bonus_line(ui, "Defense", equip_mods.defense);
+                stat_bonus_line(ui, "Speed", equip_mods.speed);
+                stat_bonus_line(ui, "Crit %", equip_mods.crit_chance * 100.0);
+                stat_bonus_line(ui, "Crit x", equip_mods.crit_multiplier);
+            });
+
+            ui.add_space(20.0);
+
+            // Column 3: Effective Stats
+            ui.vertical(|ui| {
+                ui.set_min_width(160.0);
+                ui.label(
+                    RichText::new("Effective")
+                        .font(FontId::proportional(16.0))
+                        .color(Color32::from_rgb(255, 215, 0)),
+                );
+                ui.add_space(8.0);
+                stat_display_line(ui, "Max HP", effective.max_hp, Color32::from_rgb(255, 215, 0));
+                stat_display_line(ui, "Attack", effective.attack, Color32::from_rgb(255, 215, 0));
+                stat_display_line(ui, "Defense", effective.defense, Color32::from_rgb(255, 215, 0));
+                stat_display_line(ui, "Speed", effective.speed, Color32::from_rgb(255, 215, 0));
+                stat_display_line(ui, "Crit %", effective.crit_chance * 100.0, Color32::from_rgb(255, 215, 0));
+                stat_display_line(ui, "Crit x", effective.crit_multiplier, Color32::from_rgb(255, 215, 0));
+                stat_display_line(ui, "Max Mana", effective.max_mana, Color32::from_rgb(255, 215, 0));
+                stat_display_line(ui, "Mana Regen", effective.mana_regen, Color32::from_rgb(255, 215, 0));
+            });
+        });
+    }
+
     fn render_inventory_tab(
         &mut self,
         ui: &mut Ui,
-        _equipment: &EquipmentSet,
+        equipment: &EquipmentSet,
         inventory: &Inventory,
         _stats: &CharacterStats,
     ) -> InventoryAction {
@@ -307,6 +402,18 @@ impl InventoryMenu {
                                         slot,
                                     };
                                     self.selected_item = None;
+                                }
+
+                                // Stat comparison vs equipped item
+                                if let Some(equipped) = equipment.get(slot) {
+                                    ui.add_space(8.0);
+                                    ui.label(
+                                        RichText::new(format!("vs. {}", equipped.name))
+                                            .font(FontId::proportional(12.0))
+                                            .color(rarity_color(equipped.rarity)),
+                                    );
+                                    ui.add_space(4.0);
+                                    render_stat_comparison(ui, item, equipped);
                                 }
                             }
                         }
@@ -541,6 +648,77 @@ fn stat_line(ui: &mut Ui, name: &str, value: f32) {
     ui.label(
         RichText::new(format!("{}{:.0} {}", sign, value, name))
             .font(FontId::proportional(12.0))
+            .color(color),
+    );
+}
+
+fn stat_display_line(ui: &mut Ui, name: &str, value: f32, color: Color32) {
+    ui.label(
+        RichText::new(format!("{}: {:.1}", name, value))
+            .font(FontId::proportional(12.0))
+            .color(color),
+    );
+}
+
+fn stat_bonus_line(ui: &mut Ui, name: &str, value: f32) {
+    if value.abs() < 0.001 {
+        return;
+    }
+    let sign = if value > 0.0 { "+" } else { "" };
+    let color = if value > 0.0 {
+        Color32::from_rgb(100, 220, 100)
+    } else {
+        Color32::from_rgb(220, 100, 100)
+    };
+    ui.label(
+        RichText::new(format!("{}: {}{:.1}", name, sign, value))
+            .font(FontId::proportional(12.0))
+            .color(color),
+    );
+}
+
+fn render_stat_comparison(ui: &mut Ui, new_item: &Item, equipped: &Item) {
+    let new_mods = new_item.total_modifiers();
+    let old_mods = equipped.total_modifiers();
+
+    compare_line(ui, "Max HP", new_mods.max_hp, old_mods.max_hp);
+    compare_line(ui, "Attack", new_mods.attack, old_mods.attack);
+    compare_line(ui, "Defense", new_mods.defense, old_mods.defense);
+    compare_line(ui, "Speed", new_mods.speed, old_mods.speed);
+    compare_line(ui, "Crit %", new_mods.crit_chance * 100.0, old_mods.crit_chance * 100.0);
+    compare_line(ui, "Crit x", new_mods.crit_multiplier, old_mods.crit_multiplier);
+
+    // Weapon damage comparison
+    if let (Some(new_wd), Some(old_wd)) = (&new_item.weapon_data, &equipped.weapon_data) {
+        let diff = new_wd.base_damage - old_wd.base_damage;
+        if diff.abs() > 0.01 {
+            let (arrow, color) = if diff > 0.0 {
+                ("^", Color32::from_rgb(100, 220, 100))
+            } else {
+                ("v", Color32::from_rgb(220, 100, 100))
+            };
+            ui.label(
+                RichText::new(format!("{} Damage {}{:.0}", arrow, if diff > 0.0 { "+" } else { "" }, diff))
+                    .font(FontId::proportional(11.0))
+                    .color(color),
+            );
+        }
+    }
+}
+
+fn compare_line(ui: &mut Ui, name: &str, new_val: f32, old_val: f32) {
+    let diff = new_val - old_val;
+    if diff.abs() < 0.01 {
+        return;
+    }
+    let (arrow, color) = if diff > 0.0 {
+        ("^", Color32::from_rgb(100, 220, 100))
+    } else {
+        ("v", Color32::from_rgb(220, 100, 100))
+    };
+    ui.label(
+        RichText::new(format!("{} {} {}{:.1}", arrow, name, if diff > 0.0 { "+" } else { "" }, diff))
+            .font(FontId::proportional(11.0))
             .color(color),
     );
 }
