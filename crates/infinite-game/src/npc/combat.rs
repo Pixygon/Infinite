@@ -9,6 +9,7 @@ use crate::combat::skill::SkillSlot;
 use crate::combat::status::StatusManager;
 use crate::combat::weapon::WeaponType;
 use crate::player::stats::{CharacterStats, PlayerProgression, StatGrowth};
+use super::NpcRole;
 use serde::{Deserialize, Serialize};
 
 /// Basic combat statistics for an NPC
@@ -70,6 +71,89 @@ impl CombatStats {
             attack_cooldown: 2.0,
             attack_timer: 0.0,
             element,
+            weapon_weakness: None,
+        }
+    }
+
+    /// Stats for a role — dispatches to the correct constructor
+    pub fn for_role(role: NpcRole) -> Self {
+        match role {
+            NpcRole::Enemy => Self::default_enemy(),
+            NpcRole::Guard => Self::default_guard(),
+            NpcRole::Villager => Self::default_villager(),
+            NpcRole::Shopkeeper => Self::default_shopkeeper(),
+            NpcRole::QuestGiver => Self::default_quest_giver(),
+        }
+    }
+
+    /// Guard: strong fighter, retaliates when provoked
+    pub fn default_guard() -> Self {
+        Self {
+            max_hp: 120.0,
+            current_hp: 120.0,
+            attack: 8.0,
+            defense: 6.0,
+            speed: 1.5,
+            aggro_radius: 15.0,
+            de_aggro_radius: 25.0,
+            attack_radius: 2.5,
+            attack_cooldown: 1.2,
+            attack_timer: 0.0,
+            element: Element::Physical,
+            weapon_weakness: None,
+        }
+    }
+
+    /// Villager: weak civilian, flees when attacked
+    pub fn default_villager() -> Self {
+        Self {
+            max_hp: 30.0,
+            current_hp: 30.0,
+            attack: 2.0,
+            defense: 1.0,
+            speed: 0.8,
+            aggro_radius: 8.0,
+            de_aggro_radius: 15.0,
+            attack_radius: 2.0,
+            attack_cooldown: 2.0,
+            attack_timer: 0.0,
+            element: Element::Physical,
+            weapon_weakness: None,
+        }
+    }
+
+    /// Shopkeeper: slightly tougher civilian
+    pub fn default_shopkeeper() -> Self {
+        Self {
+            max_hp: 40.0,
+            current_hp: 40.0,
+            attack: 3.0,
+            defense: 2.0,
+            speed: 0.8,
+            aggro_radius: 8.0,
+            de_aggro_radius: 15.0,
+            attack_radius: 2.0,
+            attack_cooldown: 2.0,
+            attack_timer: 0.0,
+            element: Element::Physical,
+            weapon_weakness: None,
+        }
+    }
+
+    /// Quest giver: moderate stats
+    pub fn default_quest_giver() -> Self {
+        Self {
+            max_hp: 50.0,
+            current_hp: 50.0,
+            attack: 4.0,
+            defense: 3.0,
+            speed: 1.0,
+            aggro_radius: 8.0,
+            de_aggro_radius: 15.0,
+            attack_radius: 2.0,
+            attack_cooldown: 2.0,
+            attack_timer: 0.0,
+            element: Element::Physical,
             weapon_weakness: None,
         }
     }

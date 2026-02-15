@@ -1,6 +1,6 @@
 //! NPC manager — spawn, despawn, and update all active NPCs
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use glam::Vec3;
 use infinite_world::ChunkCoord;
@@ -27,13 +27,26 @@ pub struct PendingPlayerDamage {
     pub element: Element,
 }
 
+/// Result of damaging an NPC
+#[derive(Debug, Clone)]
+pub struct DamageNpcResult {
+    /// Whether the NPC was defeated (HP <= 0)
+    pub defeated: bool,
+    /// The NPC's role
+    pub role: NpcRole,
+    /// Whether the NPC's original faction was Friendly or Neutral
+    pub was_friendly: bool,
+}
+
 /// Manages all active NPC instances
 pub struct NpcManager {
     npcs: HashMap<NpcId, NpcInstance>,
     next_id: u64,
     chunk_size: f32,
-    /// Combat stats for NPCs that have them (enemies)
+    /// Combat stats for NPCs that have them
     pub combat_stats: HashMap<NpcId, CombatStats>,
+    /// NPCs provoked by the player (attack triggered hostility)
+    provoked_npcs: HashSet<NpcId>,
     /// Respawn timers: chunk coord → list of (spawn point index, timer remaining)
     respawn_timers: Vec<(ChunkCoord, usize, f32)>,
     /// Cache of server characters keyed by persistent_key
@@ -53,6 +66,7 @@ impl NpcManager {
             next_id: 1,
             chunk_size,
             combat_stats: HashMap::new(),
+            provoked_npcs: HashSet::new(),
             respawn_timers: Vec::new(),
             character_cache: NpcCharacterCache::new(),
             npc_generator: NpcGenerator::new(),
@@ -105,8 +119,7 @@ impl NpcManager {
 
         let brain = NpcBrain::for_role(data.role);
 
-        let is_enemy = data.role == NpcRole::Enemy;
-
+        let role = data.role;
         let persistent_key = compute_persistent_key(coord.x, coord.z, point.spawn_index);
 
         let instance = NpcInstance {
@@ -122,10 +135,7 @@ impl NpcManager {
         };
 
         self.npcs.insert(id, instance);
-
-        if is_enemy {
-            self.combat_stats.insert(id, CombatStats::default_enemy());
-        }
+        self.combat_stats.insert(id, CombatStats::for_role(role));
 
         id
     }
@@ -141,6 +151,7 @@ impl NpcManager {
         for (id, key) in &to_remove {
             self.npcs.remove(id);
             self.combat_stats.remove(id);
+            self.provoked_npcs.remove(id);
             self.character_cache.clear_key(*key);
         }
     }
@@ -278,6 +289,9 @@ impl NpcManager {
             brain.world_state.set_bool("health_low", stats.current_hp / stats.max_hp < 0.2);
             brain.world_state.set_bool("is_alive", stats.current_hp > 0.0);
         }
+
+        // Provocation sensor — enables flee/chase actions gated on provocation
+        brain.world_state.set_bool("provoked", self.provoked_npcs.contains(&id));
 
         // Replan if needed
         brain.replan_timer -= delta;
@@ -422,8 +436,14 @@ impl NpcManager {
         self.npcs.values().filter(|n| n.data.faction == faction).count()
     }
 
-    /// Damage an NPC. Returns true if the NPC was defeated (HP <= 0).
-    pub fn damage_npc(&mut self, id: NpcId, damage: f32, _element: Element, _attack_type: AttackType) -> bool {
+    /// Damage an NPC. Returns a result with defeat status, role, and whether they were friendly.
+    pub fn damage_npc(&mut self, id: NpcId, damage: f32, _element: Element, _attack_type: AttackType) -> DamageNpcResult {
+        // Capture role and faction before any mutations
+        let (role, faction) = self.npcs.get(&id)
+            .map(|n| (n.data.role, n.data.faction))
+            .unwrap_or((NpcRole::Enemy, NpcFaction::Hostile));
+        let was_friendly = faction == NpcFaction::Friendly || faction == NpcFaction::Neutral;
+
         if let Some(stats) = self.combat_stats.get_mut(&id) {
             let actual = (damage - stats.defense).max(1.0);
             stats.current_hp = (stats.current_hp - actual).max(0.0);
@@ -431,16 +451,30 @@ impl NpcManager {
                 // Defeated — remove and start respawn timer
                 if let Some(npc) = self.npcs.remove(&id) {
                     let chunk = npc.chunk;
-                    // Find which spawn index this was (approximate)
+                    let key = npc.persistent_key;
+                    // Find spawn index by matching persistent_key
                     let points = generate_spawn_points(chunk.x, chunk.z, self.chunk_size);
-                    let idx = points.iter().position(|p| p.data.role == NpcRole::Enemy).unwrap_or(0);
+                    let idx = points.iter().position(|p| {
+                        compute_persistent_key(chunk.x, chunk.z, p.spawn_index) == key
+                    }).unwrap_or(0);
                     self.respawn_timers.push((chunk, idx, 30.0));
                 }
                 self.combat_stats.remove(&id);
-                return true;
+                self.provoked_npcs.remove(&id);
+                return DamageNpcResult { defeated: true, role, was_friendly };
             }
         }
-        false
+
+        // NPC survived — provoke if non-hostile and alert nearby guards
+        if was_friendly {
+            self.provoke_npc(id);
+            if let Some(npc) = self.npcs.get(&id) {
+                let pos = npc.position;
+                self.alert_nearby_guards(pos, 30.0);
+            }
+        }
+
+        DamageNpcResult { defeated: false, role, was_friendly }
     }
 
     /// Check if an enemy NPC is currently attacking (in attack range and has attack action)
@@ -493,6 +527,28 @@ impl NpcManager {
         // For now, all NPCs are level 1. In the future, this could be based on
         // distance from spawn, year, or other factors
         1
+    }
+
+    /// Mark an NPC as provoked (attacked by player)
+    pub fn provoke_npc(&mut self, id: NpcId) {
+        self.provoked_npcs.insert(id);
+    }
+
+    /// Check if an NPC has been provoked
+    pub fn is_provoked(&self, id: NpcId) -> bool {
+        self.provoked_npcs.contains(&id)
+    }
+
+    /// Alert all guards within radius of a position (provoke them)
+    pub fn alert_nearby_guards(&mut self, pos: Vec3, radius: f32) {
+        let guard_ids: Vec<NpcId> = self.npcs.values()
+            .filter(|n| n.data.role == NpcRole::Guard)
+            .filter(|n| (n.position - pos).length() < radius)
+            .map(|n| n.id)
+            .collect();
+        for id in guard_ids {
+            self.provoked_npcs.insert(id);
+        }
     }
 }
 

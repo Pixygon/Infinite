@@ -116,6 +116,11 @@ impl NpcBrain {
     fn villager_setup() -> (Vec<Goal>, Vec<Action>) {
         let goals = vec![
             Goal {
+                name: "flee_danger".into(),
+                desired_state: WorldState::from_bool("is_safe", true),
+                priority: 0.9,
+            },
+            Goal {
                 name: "stay_near_home".into(),
                 desired_state: WorldState::from_bool("at_home", true),
                 priority: 0.3,
@@ -128,6 +133,13 @@ impl NpcBrain {
         ];
 
         let actions = vec![
+            Action {
+                name: "flee_from_target".into(),
+                preconditions: WorldState::from_bool("provoked", true),
+                effects: WorldState::from_bool("is_safe", true),
+                cost: 0.5,
+                duration: 5.0,
+            },
             Action {
                 name: "go_home".into(),
                 preconditions: WorldState::new(),
@@ -185,10 +197,17 @@ impl NpcBrain {
             },
             Action {
                 name: "chase_enemy".into(),
-                preconditions: WorldState::from_bool("player_in_aggro_range", true),
-                effects: WorldState::from_bool("threat_neutralized", true),
-                cost: 2.0,
+                preconditions: WorldState::from_bool("provoked", true),
+                effects: WorldState::from_bool("player_in_attack_range", true),
+                cost: 1.5,
                 duration: 5.0,
+            },
+            Action {
+                name: "attack_melee".into(),
+                preconditions: WorldState::from_bool("player_in_attack_range", true),
+                effects: WorldState::from_bool("threat_neutralized", true),
+                cost: 0.5,
+                duration: 1.0,
             },
         ];
 
@@ -198,6 +217,11 @@ impl NpcBrain {
     fn shopkeeper_setup() -> (Vec<Goal>, Vec<Action>) {
         let goals = vec![
             Goal {
+                name: "flee_danger".into(),
+                desired_state: WorldState::from_bool("is_safe", true),
+                priority: 0.9,
+            },
+            Goal {
                 name: "tend_shop".into(),
                 desired_state: WorldState::from_bool("shop_tended", true),
                 priority: 0.5,
@@ -205,6 +229,13 @@ impl NpcBrain {
         ];
 
         let actions = vec![
+            Action {
+                name: "flee_from_target".into(),
+                preconditions: WorldState::from_bool("provoked", true),
+                effects: WorldState::from_bool("is_safe", true),
+                cost: 0.5,
+                duration: 5.0,
+            },
             Action {
                 name: "wait_for_customer".into(),
                 preconditions: WorldState::new(),
@@ -227,6 +258,11 @@ impl NpcBrain {
     fn quest_giver_setup() -> (Vec<Goal>, Vec<Action>) {
         let goals = vec![
             Goal {
+                name: "flee_danger".into(),
+                desired_state: WorldState::from_bool("is_safe", true),
+                priority: 0.9,
+            },
+            Goal {
                 name: "wait_for_hero".into(),
                 desired_state: WorldState::from_bool("waiting", true),
                 priority: 0.5,
@@ -234,6 +270,13 @@ impl NpcBrain {
         ];
 
         let actions = vec![
+            Action {
+                name: "flee_from_target".into(),
+                preconditions: WorldState::from_bool("provoked", true),
+                effects: WorldState::from_bool("is_safe", true),
+                cost: 0.5,
+                duration: 5.0,
+            },
             Action {
                 name: "wait".into(),
                 preconditions: WorldState::new(),

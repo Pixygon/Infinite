@@ -1214,9 +1214,11 @@ impl InfiniteApp {
                         !matches!(i.kind, infinite_game::InteractableKind::Npc { .. })
                     });
 
-                    // Add current NPC interactables (non-hostile only)
+                    // Add current NPC interactables (non-hostile and not provoked)
                     for npc in npc_manager.npcs_iter() {
-                        if npc.data.faction != infinite_game::NpcFaction::Hostile {
+                        if npc.data.faction != infinite_game::NpcFaction::Hostile
+                            && !npc_manager.is_provoked(npc.id)
+                        {
                             self.interaction_system.add(Interactable::npc(
                                 npc.position,
                                 npc.id,
@@ -1226,10 +1228,13 @@ impl InfiniteApp {
                         }
                     }
 
-                    // --- Enemy combat: enemies damage player ---
-                    // Collect attacking enemy IDs and positions first (avoids borrow conflicts)
+                    // --- NPC combat: enemies and provoked NPCs damage player ---
+                    // Collect attacking NPC IDs and positions first (avoids borrow conflicts)
                     let attacking_enemies: Vec<(NpcId, Vec3)> = npc_manager.npcs_iter()
-                        .filter(|n| n.data.role == infinite_game::NpcRole::Enemy)
+                        .filter(|n| {
+                            n.data.role == infinite_game::NpcRole::Enemy
+                            || npc_manager.is_provoked(n.id)
+                        })
                         .filter(|n| {
                             n.brain.as_ref()
                                 .and_then(|b| b.current_action_name())
@@ -1267,10 +1272,10 @@ impl InfiniteApp {
                     let player_forward = camera.forward();
                     let player_forward_xz = Vec3::new(player_forward.x, 0.0, player_forward.z).normalize_or_zero();
 
-                    // Helper closure: find closest hostile NPC in attack cone
+                    // Helper closure: find closest NPC with combat stats in attack cone
                     let find_target = |npc_manager: &NpcManager, range: f32| -> Option<(NpcId, Vec3, f32)> {
                         npc_manager.npcs_iter()
-                            .filter(|n| n.data.faction == infinite_game::NpcFaction::Hostile)
+                            .filter(|n| npc_manager.combat_stats.contains_key(&n.id))
                             .filter_map(|n| {
                                 let to_npc = n.position - player_pos;
                                 let to_npc_xz = Vec3::new(to_npc.x, 0.0, to_npc.z);
@@ -1302,7 +1307,7 @@ impl InfiniteApp {
                                     let event = self.player_combat.calculate_full_damage(
                                         npc_defense, npc_element, npc_weakness,
                                     );
-                                    let defeated = npc_manager.damage_npc(
+                                    let result = npc_manager.damage_npc(
                                         npc_id, event.final_amount, event.element, event.attack_type,
                                     );
 
@@ -1313,7 +1318,7 @@ impl InfiniteApp {
                                         timer: 1.0,
                                     });
 
-                                    if defeated {
+                                    if result.defeated {
                                         let npc_level = npc_manager.npc_level(npc_id);
                                         let xp = infinite_game::player::stats::xp_for_enemy(
                                             npc_level, infinite_game::player::stats::EnemyType::Normal,
@@ -1325,9 +1330,19 @@ impl InfiniteApp {
                                             }
                                             self.level_up_notification = Some((new_level, 3.0));
                                         }
-                                        let gold_reward = 10 * npc_level as u64;
+                                        let gold_reward = match result.role {
+                                            infinite_game::NpcRole::Guard => 25 * npc_level as u64,
+                                            infinite_game::NpcRole::Shopkeeper => 50 * npc_level as u64,
+                                            infinite_game::NpcRole::Villager => 2 * npc_level as u64,
+                                            infinite_game::NpcRole::QuestGiver => 15 * npc_level as u64,
+                                            infinite_game::NpcRole::Enemy => 10 * npc_level as u64,
+                                        };
                                         self.player_combat.gold += gold_reward;
-                                        self.notification_text = Some(format!("+{} XP  +{} Gold", xp, gold_reward));
+                                        if result.was_friendly {
+                                            self.notification_text = Some(format!("You murdered a {}!  +{} Gold", result.role.name(), gold_reward));
+                                        } else {
+                                            self.notification_text = Some(format!("+{} XP  +{} Gold", xp, gold_reward));
+                                        }
                                         self.notification_timer = 1.5;
                                     }
                                 }
@@ -1356,7 +1371,7 @@ impl InfiniteApp {
                                 let event = self.player_combat.calculate_full_damage(
                                     npc_defense, npc_element, npc_weakness,
                                 );
-                                let defeated = npc_manager.damage_npc(
+                                let result = npc_manager.damage_npc(
                                     npc_id, event.final_amount, event.element, event.attack_type,
                                 );
 
@@ -1367,7 +1382,7 @@ impl InfiniteApp {
                                     timer: 1.0,
                                 });
 
-                                if defeated {
+                                if result.defeated {
                                     let npc_level = npc_manager.npc_level(npc_id);
                                     let xp = infinite_game::player::stats::xp_for_enemy(
                                         npc_level, infinite_game::player::stats::EnemyType::Normal,
@@ -1379,9 +1394,19 @@ impl InfiniteApp {
                                         }
                                         self.level_up_notification = Some((new_level, 3.0));
                                     }
-                                    let gold_reward = 10 * npc_level as u64;
+                                    let gold_reward = match result.role {
+                                        infinite_game::NpcRole::Guard => 25 * npc_level as u64,
+                                        infinite_game::NpcRole::Shopkeeper => 50 * npc_level as u64,
+                                        infinite_game::NpcRole::Villager => 2 * npc_level as u64,
+                                        infinite_game::NpcRole::QuestGiver => 15 * npc_level as u64,
+                                        infinite_game::NpcRole::Enemy => 10 * npc_level as u64,
+                                    };
                                     self.player_combat.gold += gold_reward;
-                                    self.notification_text = Some(format!("+{} XP  +{} Gold", xp, gold_reward));
+                                    if result.was_friendly {
+                                        self.notification_text = Some(format!("You murdered a {}!  +{} Gold", result.role.name(), gold_reward));
+                                    } else {
+                                        self.notification_text = Some(format!("+{} XP  +{} Gold", xp, gold_reward));
+                                    }
                                     self.notification_timer = 1.5;
                                 }
                             }
@@ -1416,7 +1441,7 @@ impl InfiniteApp {
                                                 let npc_defense = npc_manager.combat_stats.get(&npc_id)
                                                     .map(|s| s.defense).unwrap_or(0.0);
                                                 let damage = (skill_damage - npc_defense * 0.5).max(1.0);
-                                                let defeated = npc_manager.damage_npc(
+                                                let result = npc_manager.damage_npc(
                                                     npc_id, damage, skill_element,
                                                     infinite_game::combat::damage::AttackType::Light,
                                                 );
@@ -1428,7 +1453,7 @@ impl InfiniteApp {
                                                     timer: 1.0,
                                                 });
 
-                                                if defeated {
+                                                if result.defeated {
                                                     let npc_level = npc_manager.npc_level(npc_id);
                                                     let xp = infinite_game::player::stats::xp_for_enemy(
                                                         npc_level, infinite_game::player::stats::EnemyType::Normal,
@@ -1440,9 +1465,19 @@ impl InfiniteApp {
                                                         }
                                                         self.level_up_notification = Some((new_level, 3.0));
                                                     }
-                                                    let gold_reward = 10 * npc_level as u64;
+                                                    let gold_reward = match result.role {
+                                                        infinite_game::NpcRole::Guard => 25 * npc_level as u64,
+                                                        infinite_game::NpcRole::Shopkeeper => 50 * npc_level as u64,
+                                                        infinite_game::NpcRole::Villager => 2 * npc_level as u64,
+                                                        infinite_game::NpcRole::QuestGiver => 15 * npc_level as u64,
+                                                        infinite_game::NpcRole::Enemy => 10 * npc_level as u64,
+                                                    };
                                                     self.player_combat.gold += gold_reward;
-                                                    self.notification_text = Some(format!("+{} XP  +{} Gold", xp, gold_reward));
+                                                    if result.was_friendly {
+                                                        self.notification_text = Some(format!("You murdered a {}!  +{} Gold", result.role.name(), gold_reward));
+                                                    } else {
+                                                        self.notification_text = Some(format!("+{} XP  +{} Gold", xp, gold_reward));
+                                                    }
                                                     self.notification_timer = 1.5;
                                                 }
                                             }
@@ -2485,14 +2520,15 @@ impl InfiniteApp {
                                         }
 
                                         let is_hostile = npc.data.faction == infinite_game::NpcFaction::Hostile;
+                                        let is_provoked = npc_manager.is_provoked(npc.id);
                                         let is_damaged = npc_manager.combat_stats.get(&npc.id)
                                             .map(|s| s.current_hp < s.max_hp)
                                             .unwrap_or(false);
                                         let in_aggro = is_hostile && dist_to_player < npc_manager.combat_stats.get(&npc.id)
                                             .map(|s| s.aggro_radius).unwrap_or(12.0);
 
-                                        // Show bar if damaged OR hostile in aggro range
-                                        if !is_damaged && !in_aggro {
+                                        // Show bar if damaged, provoked, or hostile in aggro range
+                                        if !is_damaged && !is_provoked && !in_aggro {
                                             continue;
                                         }
 
@@ -2503,11 +2539,15 @@ impl InfiniteApp {
                                                 let bar_width = 70.0_f32;
                                                 let bar_height = 8.0_f32;
 
-                                                // Name color based on faction
-                                                let name_color = match npc.data.faction {
-                                                    infinite_game::NpcFaction::Hostile => egui::Color32::from_rgb(220, 80, 80),
-                                                    infinite_game::NpcFaction::Friendly => egui::Color32::from_rgb(80, 220, 80),
-                                                    _ => egui::Color32::from_rgb(200, 200, 200),
+                                                // Name color based on faction (orange if provoked friendly)
+                                                let name_color = if is_provoked && !is_hostile {
+                                                    egui::Color32::from_rgb(230, 160, 50) // orange — player is the aggressor
+                                                } else {
+                                                    match npc.data.faction {
+                                                        infinite_game::NpcFaction::Hostile => egui::Color32::from_rgb(220, 80, 80),
+                                                        infinite_game::NpcFaction::Friendly => egui::Color32::from_rgb(80, 220, 80),
+                                                        _ => egui::Color32::from_rgb(200, 200, 200),
+                                                    }
                                                 };
 
                                                 egui::Area::new(egui::Id::new(("enemy_hp", npc.id.0)))
@@ -2519,7 +2559,12 @@ impl InfiniteApp {
                                                                 .font(egui::FontId::proportional(10.0))
                                                                 .color(name_color),
                                                         );
-                                                        // HP bar
+                                                        // HP bar color: red for hostile, orange for provoked friendly
+                                                        let bar_color = if is_provoked && !is_hostile {
+                                                            egui::Color32::from_rgb(230, 160, 50)
+                                                        } else {
+                                                            egui::Color32::from_rgb(200, 50, 50)
+                                                        };
                                                         let bg_rect = egui::Rect::from_min_size(
                                                             ui.cursor().min,
                                                             egui::vec2(bar_width, bar_height)
@@ -2529,7 +2574,7 @@ impl InfiniteApp {
                                                             bg_rect.min,
                                                             egui::vec2(bar_width * hp_frac, bar_height)
                                                         );
-                                                        ui.painter().rect_filled(hp_rect, 2.0, egui::Color32::from_rgb(200, 50, 50));
+                                                        ui.painter().rect_filled(hp_rect, 2.0, bar_color);
                                                         ui.allocate_space(egui::vec2(bar_width, bar_height));
 
                                                         // Level and element info
