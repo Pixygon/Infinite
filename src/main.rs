@@ -90,7 +90,7 @@ use crate::character::CharacterData;
 use crate::save::{SaveData, PlayerSaveData, WorldSaveData};
 use crate::settings::GameSettings;
 use crate::state::{ApplicationState, StateTransition};
-use crate::ui::{AdminPanel, CharacterCreator, InventoryAction, InventoryMenu, LoadingScreen, LoginMenu, MainMenu, PauseMenu, SaveLoadAction, SaveLoadMenu, SettingsMenu};
+use crate::ui::{AdminPanel, CharacterCreator, InventoryAction, InventoryMenu, LoadingScreen, LoginMenu, MainMenu, PauseMenu, SaveLoadAction, SaveLoadMenu, SettingsMenu, ShopAction, ShopMenu, sell_price_for};
 use std::collections::HashMap;
 
 /// Mesh buffers for GPU rendering
@@ -288,6 +288,16 @@ struct InfiniteApp {
     show_inventory: bool,
     /// Inventory menu state
     inventory_menu: InventoryMenu,
+
+    // Shop UI
+    /// Whether the shop is open
+    show_shop: bool,
+    /// Shop menu state
+    shop_menu: ShopMenu,
+    /// Item catalog loaded from server
+    item_catalog: Option<infinite_game::combat::ItemCatalog>,
+    /// Pending catalog fetch request
+    pending_catalog: Option<infinite_integration::PendingRequest<Vec<infinite_integration::types::ServerCharacterItem>>>,
 }
 
 impl InfiniteApp {
@@ -361,6 +371,11 @@ impl InfiniteApp {
 
             show_inventory: false,
             inventory_menu: InventoryMenu::new(),
+
+            show_shop: false,
+            shop_menu: ShopMenu::new(),
+            item_catalog: None,
+            pending_catalog: None,
         }
     }
 
@@ -587,6 +602,7 @@ impl InfiniteApp {
         self.climbing = false;
         self.climb_remaining = 0.0;
         self.show_inventory = false;
+        self.show_shop = false;
 
         // Clear terrain meshes
         if let Some(render_ctx) = &mut self.render_ctx {
@@ -629,6 +645,7 @@ impl InfiniteApp {
             skill_slots: Some(self.player_combat.skill_slots.clone()),
             known_runes: Some(self.player_combat.known_runes.clone()),
             inventory: Some(self.player_combat.inventory.items.clone()),
+            gold: Some(self.player_combat.gold),
         }
     }
 
@@ -713,6 +730,11 @@ impl InfiniteApp {
         // Restore inventory
         if let Some(items) = data.inventory {
             self.player_combat.inventory.items = items;
+        }
+
+        // Restore gold
+        if let Some(gold) = data.gold {
+            self.player_combat.gold = gold;
         }
 
         // Reset climbing state
@@ -932,6 +954,23 @@ impl InfiniteApp {
     fn update(&mut self, delta: f32) {
         self.game_time.update(delta);
 
+        // Poll pending item catalog fetch
+        if let Some(pending) = &self.pending_catalog {
+            if let Some(result) = pending.try_recv() {
+                match result {
+                    Ok(server_items) => {
+                        let catalog = infinite_game::combat::ItemCatalog::load_from_server(server_items);
+                        info!("Item catalog loaded: {} items", catalog.len());
+                        self.item_catalog = Some(catalog);
+                    }
+                    Err(e) => {
+                        tracing::error!("Failed to load item catalog: {}", e);
+                    }
+                }
+                self.pending_catalog = None;
+            }
+        }
+
         // Update based on current state
         match &self.app_state {
             ApplicationState::Loading(phase) => {
@@ -960,7 +999,7 @@ impl InfiniteApp {
             ApplicationState::Playing => {
                 // Release cursor when debug overlay or any dialogue is active
                 let dialogue_active = self.dialogue_system.is_active() || self.ai_dialogue.is_active();
-                self.update_cursor_capture(!self.debug_visible && !dialogue_active);
+                self.update_cursor_capture(!self.debug_visible && !dialogue_active && !self.show_shop);
 
                 // Update world systems
                 self.time_of_day.update(delta);
@@ -1286,7 +1325,9 @@ impl InfiniteApp {
                                             }
                                             self.level_up_notification = Some((new_level, 3.0));
                                         }
-                                        self.notification_text = Some(format!("+{} XP", xp));
+                                        let gold_reward = 10 * npc_level as u64;
+                                        self.player_combat.gold += gold_reward;
+                                        self.notification_text = Some(format!("+{} XP  +{} Gold", xp, gold_reward));
                                         self.notification_timer = 1.5;
                                     }
                                 }
@@ -1338,7 +1379,9 @@ impl InfiniteApp {
                                         }
                                         self.level_up_notification = Some((new_level, 3.0));
                                     }
-                                    self.notification_text = Some(format!("+{} XP", xp));
+                                    let gold_reward = 10 * npc_level as u64;
+                                    self.player_combat.gold += gold_reward;
+                                    self.notification_text = Some(format!("+{} XP  +{} Gold", xp, gold_reward));
                                     self.notification_timer = 1.5;
                                 }
                             }
@@ -1397,7 +1440,9 @@ impl InfiniteApp {
                                                         }
                                                         self.level_up_notification = Some((new_level, 3.0));
                                                     }
-                                                    self.notification_text = Some(format!("+{} XP", xp));
+                                                    let gold_reward = 10 * npc_level as u64;
+                                                    self.player_combat.gold += gold_reward;
+                                                    self.notification_text = Some(format!("+{} XP  +{} Gold", xp, gold_reward));
                                                     self.notification_timer = 1.5;
                                                 }
                                             }
@@ -1531,6 +1576,13 @@ impl InfiniteApp {
                                 };
 
                                 if let Some((npc_name, role, persistent_key, chunk, goap_state)) = npc_info {
+                                    // Shopkeeper: open shop instead of dialogue
+                                    if role == infinite_game::NpcRole::Shopkeeper && self.item_catalog.is_some() {
+                                        self.show_shop = true;
+                                        self.shop_menu = ShopMenu::new();
+                                        self.update_cursor_capture(false);
+                                        // Skip dialogue — continue below is not needed since we early-continue via the if
+                                    } else {
                                     // Try AI dialogue if integration client is available
                                     let use_ai = if let Some(client) = &self.integration_client {
                                         if let Some(npc_manager) = &mut self.npc_manager {
@@ -1588,6 +1640,7 @@ impl InfiniteApp {
                                     if !use_ai {
                                         self.dialogue_system.start_dialogue(npc_id, npc_name, role);
                                     }
+                                    } // end else (non-shopkeeper)
                                 }
                             }
                             InteractionResult::ToggleDoor { now_open, .. } => {
@@ -1729,6 +1782,14 @@ impl InfiniteApp {
                 if matches!(old_state, ApplicationState::AdminTools) {
                     self.admin_panel = None;
                 }
+                // Fetch item catalog from server after login
+                if matches!(old_state, ApplicationState::Login) {
+                    if let Some(client) = &self.integration_client {
+                        if client.is_authenticated() && self.item_catalog.is_none() {
+                            self.pending_catalog = Some(client.list_project_items());
+                        }
+                    }
+                }
             }
             _ => {}
         }
@@ -1784,6 +1845,7 @@ impl InfiniteApp {
         let mut should_save_settings = false;
         let mut save_load_pending_action: Option<(StateTransition, SaveLoadAction)> = None;
         let mut inventory_pending_action = InventoryAction::None;
+        let mut shop_pending_action = ShopAction::None;
         let mut close_inventory = false;
 
         if let Some(gui) = &mut self.gui {
@@ -1974,6 +2036,15 @@ impl InfiniteApp {
                                                 );
                                                 ui.painter().rect_filled(xp_fill, 3.0, egui::Color32::from_rgb(100, 50, 200));
                                                 ui.allocate_space(egui::vec2(160.0, 12.0));
+
+                                                ui.add_space(6.0);
+
+                                                // Gold
+                                                ui.label(
+                                                    egui::RichText::new(format!("Gold: {}", self.player_combat.gold))
+                                                        .font(egui::FontId::proportional(13.0))
+                                                        .color(egui::Color32::from_rgb(255, 215, 0))
+                                                );
                                             });
                                     });
 
@@ -2880,6 +2951,19 @@ impl InfiniteApp {
                                     }
                                 }
 
+                                // --- Shop overlay ---
+                                if self.show_shop {
+                                    if let Some(catalog) = &self.item_catalog {
+                                        let action = self.shop_menu.render(
+                                            ui,
+                                            catalog,
+                                            &self.player_combat.inventory,
+                                            self.player_combat.gold,
+                                        );
+                                        shop_pending_action = action;
+                                    }
+                                }
+
                                 StateTransition::None
                             }
                             ApplicationState::AdminTools => {
@@ -3014,6 +3098,51 @@ impl InfiniteApp {
                 }
             }
             InventoryAction::None => {}
+        }
+
+        // Process shop actions (deferred to avoid borrow conflicts)
+        match shop_pending_action {
+            ShopAction::Buy { catalog_index } => {
+                if let Some(catalog) = &self.item_catalog {
+                    let price = catalog.price(catalog_index);
+                    if self.player_combat.gold >= price {
+                        if let Some(item) = catalog.items().get(catalog_index).cloned() {
+                            if self.player_combat.inventory.add_item(item.clone()).is_ok() {
+                                self.player_combat.gold -= price;
+                                self.notification_text = Some(format!("Bought {}", item.name));
+                                self.notification_timer = 1.5;
+                            } else {
+                                self.notification_text = Some("Inventory full!".to_string());
+                                self.notification_timer = 2.0;
+                            }
+                        }
+                    } else {
+                        self.notification_text = Some("Not enough gold!".to_string());
+                        self.notification_timer = 2.0;
+                    }
+                }
+            }
+            ShopAction::Sell { inventory_index } => {
+                if let Some(item) = self.player_combat.inventory.get(inventory_index) {
+                    let sell_price = if let Some(catalog) = &self.item_catalog {
+                        sell_price_for(item, catalog)
+                    } else {
+                        1
+                    };
+                    let item_name = item.name.clone();
+                    self.player_combat.inventory.remove_item(inventory_index);
+                    self.player_combat.gold += sell_price;
+                    self.notification_text = Some(format!("Sold {} for {} gold", item_name, sell_price));
+                    self.notification_timer = 1.5;
+                    // Reset selection after selling
+                    self.shop_menu.selected_sell_item_reset();
+                }
+            }
+            ShopAction::Close => {
+                self.show_shop = false;
+                self.update_cursor_capture(true);
+            }
+            ShopAction::None => {}
         }
 
         // Apply state transition after UI is done
@@ -3763,7 +3892,10 @@ impl ApplicationHandler for InfiniteApp {
                 if logical_key == Key::Named(NamedKey::Escape) && state == ElementState::Pressed {
                     match &self.app_state {
                         ApplicationState::Playing => {
-                            if self.show_inventory {
+                            if self.show_shop {
+                                self.show_shop = false;
+                                self.update_cursor_capture(true);
+                            } else if self.show_inventory {
                                 self.show_inventory = false;
                                 self.update_cursor_capture(true);
                             } else {

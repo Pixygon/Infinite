@@ -3,6 +3,7 @@
 //! Provides elements, damage calculation, weapons, items, equipment,
 //! gems, skills, rune composition, and status effects.
 
+pub mod catalog;
 pub mod damage;
 pub mod element;
 pub mod equipment;
@@ -16,6 +17,7 @@ pub mod starter_items;
 pub mod status;
 pub mod weapon;
 
+pub use catalog::ItemCatalog;
 pub use damage::{AttackType, DamageEvent, StatModifiers, calculate_combat_damage};
 pub use element::Element;
 pub use equipment::{EquipError, EquipmentSet, EquipmentSlot};

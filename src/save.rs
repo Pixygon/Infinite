@@ -59,6 +59,9 @@ pub struct SaveData {
     /// Player inventory
     #[serde(default)]
     pub inventory: Option<Vec<Item>>,
+    /// Player gold
+    #[serde(default)]
+    pub gold: Option<u64>,
 }
 
 /// Saved player state
@@ -277,6 +280,7 @@ mod tests {
             skill_slots: None,
             known_runes: None,
             inventory: None,
+            gold: None,
         }
     }
 

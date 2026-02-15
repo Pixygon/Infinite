@@ -152,6 +152,9 @@ pub struct PlayerCombatState {
     /// Player inventory
     #[serde(default)]
     pub inventory: Inventory,
+    /// Player gold currency
+    #[serde(default)]
+    pub gold: u64,
     /// Dodge cooldown duration in seconds
     #[serde(skip)]
     pub dodge_cooldown: f32,
@@ -193,6 +196,7 @@ impl PlayerCombatState {
             active_attack_type: None,
             heavy_attack_timer: 0.0,
             inventory: Inventory::new(),
+            gold: 0,
             dodge_cooldown: 1.5,
             dodge_cooldown_timer: 0.0,
             is_dodging: false,
@@ -220,6 +224,7 @@ impl PlayerCombatState {
             active_attack_type: None,
             heavy_attack_timer: 0.0,
             inventory: Inventory::new(),
+            gold: 0,
             dodge_cooldown: 1.5,
             dodge_cooldown_timer: 0.0,
             is_dodging: false,
